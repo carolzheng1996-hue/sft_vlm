@@ -1,0 +1,137 @@
+{
+  "version": "template-v0.1",
+  "tools": [
+    {
+      "name": "load_timeseries_table",
+      "type": "data_io",
+      "input": "csv_path, time_col, target_col, id_col?",
+      "output": "typed dataframe summary",
+      "use_when": "需要读取原始 train/valid 数据或检查 schema、频率、缺失、重复时间戳时先调用。"
+    },
+    {
+      "name": "profile_timeseries",
+      "type": "statistics",
+      "input": "series or panel dataframe",
+      "output": "frequency, length, missing ratio, zero ratio, mean/std, quantiles, trend strength, stationarity hints",
+      "use_when": "做 text-only 数据画像、建模前体检、选择验证方式和指标前调用。"
+    },
+    {
+      "name": "plot_overview",
+      "type": "visualization",
+      "input": "series or panel dataframe",
+      "output": "overview line plot or small multiples image",
+      "use_when": "需要判断趋势、level shift、视觉异常、异方差、多序列共同模式时调用。"
+    },
+    {
+      "name": "plot_seasonal_profile",
+      "type": "visualization",
+      "input": "series, frequency, candidate periods",
+      "output": "seasonal subseries / calendar profile image",
+      "use_when": "需要确认日/周/月/年季节性，或残差存在周期结构时调用。"
+    },
+    {
+      "name": "detect_anomaly_changepoint",
+      "type": "diagnostics",
+      "input": "series, sensitivity",
+      "output": "outlier indices, changepoint candidates, scores",
+      "use_when": "需要区分点异常、事件尖峰、永久水平漂移、数据错误或业务事件时调用。"
+    },
+    {
+      "name": "analyze_missingness",
+      "type": "data_quality",
+      "input": "panel dataframe",
+      "output": "missing blocks, missingness by id/time/field, heatmap",
+      "use_when": "存在缺失、间断采样、补齐策略选择或缺失机制判断时调用。"
+    },
+    {
+      "name": "similarity_search",
+      "type": "similarity",
+      "input": "multiple series, metric",
+      "output": "nearest neighbors, distance matrix, cluster labels",
+      "use_when": "需要比较多个序列趋势一致性、形状相似性、方差/分布相似性或分组建模时调用。"
+    },
+    {
+      "name": "residual_diagnostics",
+      "type": "model_diagnostics",
+      "input": "y_true, y_pred, timestamp, id?",
+      "output": "residual summary, ACF, residual by time/group, coverage diagnostics",
+      "use_when": "分析预测残差、校准不足、遗漏季节性、系统性偏差时调用。"
+    },
+    {
+      "name": "drift_detection",
+      "type": "monitoring",
+      "input": "reference window, current window, features/target/residuals",
+      "output": "drift scores, changed fields, retrain trigger recommendation",
+      "use_when": "上线监控、分布漂移、概念漂移、重训练触发规则设计时调用。"
+    },
+    {
+      "name": "rolling_backtest",
+      "type": "evaluation",
+      "input": "model spec, data, horizon, cutoffs, metrics",
+      "output": "backtest metrics by cutoff/horizon/id",
+      "use_when": "需要比较模型、验证策略、预测 horizon 误差形态时调用。"
+    }
+  ],
+  "models": [
+    {
+      "name": "seasonal_naive",
+      "family": "baseline",
+      "good_for": "强季节性、低成本 baseline、快速 sanity check",
+      "avoid_when": "多协变量、结构变化明显或需要复杂非线性关系"
+    },
+    {
+      "name": "ETS",
+      "family": "statistical",
+      "good_for": "单序列、趋势/季节性相对稳定、解释性较强",
+      "avoid_when": "大量面板序列、高维外生变量、强非线性"
+    },
+    {
+      "name": "ARIMA/SARIMAX",
+      "family": "statistical",
+      "good_for": "单序列自相关明显、平稳化后结构清晰、少量外生变量",
+      "avoid_when": "大量序列、复杂多季节性、强缺失和异常未处理"
+    },
+    {
+      "name": "Prophet",
+      "family": "decomposable",
+      "good_for": "业务日历、节假日、趋势变点、日/周/年季节性",
+      "avoid_when": "高频复杂动态、短序列、需要严格概率校准"
+    },
+    {
+      "name": "LightGBM/CatBoost global forecaster",
+      "family": "ml_global",
+      "good_for": "多序列面板、已知未来协变量、滞后/滚动/日历特征、异质序列共享信息",
+      "avoid_when": "样本极少、需要端到端长序列表征且特征工程不可行"
+    },
+    {
+      "name": "Croston/TSB",
+      "family": "intermittent_demand",
+      "good_for": "间歇性需求、零值比例高、补货/服务水平场景",
+      "avoid_when": "连续平滑需求或强外生变量驱动"
+    },
+    {
+      "name": "N-BEATS/N-HiTS",
+      "family": "deep_univariate_or_global",
+      "good_for": "较多历史、非线性模式、多步预测、可训练 deep baseline",
+      "avoid_when": "数据量小、部署资源受限、解释性要求高"
+    },
+    {
+      "name": "TFT",
+      "family": "deep_global",
+      "good_for": "多序列、静态特征、已知未来协变量、需要分位数预测和变量重要性",
+      "avoid_when": "数据量不足、训练成本敏感、特征可用性差"
+    },
+    {
+      "name": "PatchTST/TimesNet",
+      "family": "deep_representation",
+      "good_for": "长历史、多变量、复杂周期/频域模式、统一深度模型比较",
+      "avoid_when": "短序列、小数据、强业务可解释约束"
+    },
+    {
+      "name": "anomaly detector + forecasting hybrid",
+      "family": "monitoring_hybrid",
+      "good_for": "传感器异常、漂移监控、预测前清洗/标注异常事件",
+      "avoid_when": "数据干净且目标只是普通点预测"
+    }
+  ]
+}

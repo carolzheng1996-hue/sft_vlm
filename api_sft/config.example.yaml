@@ -1,0 +1,126 @@
+seed: 20260712
+output_dir: api_sft/output
+# 可选：从该文件加载 KEY=VALUE。文件不存在时跳过；真实 .env 已被 .gitignore 排除。
+env_file: api_sft/.env
+# false 表示终端中已存在的环境变量优先于 .env。
+env_override: false
+task_pool: api_sft/task_pool.yaml
+coverage_matrix: api_sft/coverage_matrix.yaml
+scenario_count: 200
+minimum_quality_score: 0.75
+
+scenario_generation:
+  version: v4
+  # 当前场景数据使用无版本后缀的稳定目录；记录内部仍保存 generator_version。
+  output_subdir: scenarios
+  complexity_mix:
+    controlled: 0.20
+    compositional: 0.60
+    confounded: 0.20
+  # 普通诊断图片只能依据观测数据生成，不得读取 ground_truth。
+  oracle_free_images: true
+  multiseries:
+    quality_gate: true
+    max_attempts: 12
+    general_correlation_mix: {low: 0.25, medium: 0.50, high: 0.25}
+
+modality_sampling:
+  enabled: true
+  ensure_each_subtask_both_modalities: false
+  ensure_each_parent_task_both_modalities: true
+  policies:
+    low: {text_only: 0.75, image_text: 0.10, paired: 0.15}
+    medium: {text_only: 0.30, image_text: 0.30, paired: 0.40}
+    high: {text_only: 0.10, image_text: 0.75, paired: 0.15}
+
+catalogs:
+  # 轨迹阶段以该目录的当前工具源码为真源；prepare-catalogs 会先冻结一份 source bundle。
+  tools_repo_root: /Users/monychen/Documents/tsa/claude_tsa
+  # 未配置 tools_repo_root 时才使用已有 bundle。
+  tools_bundle: null
+  model_metadata:
+    - agent_tools/metadata_1.json
+    - agent_tools/metadata_2.json
+    - agent_tools/metadata_3.json
+
+generation:
+  question_writer_prompt: api_sft/prompts/question_writer_system.txt
+  question_max_attempts: 2
+  timeout_seconds: 120
+  retries: 3
+  max_concurrency: 4
+
+trajectory_generation:
+  max_attempts: 2
+  min_tool_calls: 1
+  min_distinct_tools: 1
+  max_tool_calls: 8
+  max_tool_result_chars: 16000
+  timeout_seconds: 180
+  retries: 3
+
+# API key 支持两种方式：
+# 1. 推荐：api_key_env 指向终端环境变量或 env_file 中的变量名。
+# 2. 也可直接在本地 config.yaml 设置 api_key；不要写入 config.example.yaml 或提交 Git。
+# 两者同时存在时，api_key_env 对应的环境变量优先，api_key 作为回退。
+models:
+  question:
+    base_url: https://api.openai.com/v1
+    model: gpt-4.1-mini
+    api_key_env: OPENAI_API_KEY
+    api_key: null
+    temperature: 0.7
+    response_format: true
+  trajectory_candidates:
+    - name: trajectory_a
+      base_url: https://api.openai.com/v1
+      model: gpt-4.1
+      api_key_env: OPENAI_API_KEY
+      api_key: null
+      temperature: 0.2
+      response_format: false
+      parallel_tool_calls: false
+    - name: trajectory_b
+      base_url: https://second-provider.example/v1
+      model: replace-with-tool-call-model
+      api_key_env: SECOND_VLM_API_KEY
+      api_key: null
+      temperature: 0.2
+      response_format: false
+      parallel_tool_calls: false
+  trajectory_selector:
+    base_url: https://api.openai.com/v1
+    model: gpt-4.1
+    api_key_env: OPENAI_API_KEY
+    api_key: null
+    temperature: 0.0
+    response_format: true
+  answer_vlms:
+    - name: vlm_a
+      base_url: https://api.openai.com/v1
+      model: gpt-4.1
+      api_key_env: OPENAI_API_KEY
+      api_key: null
+      temperature: 0.3
+      response_format: true
+    - name: vlm_b
+      base_url: https://second-provider.example/v1
+      model: replace-with-vlm-name
+      api_key_env: SECOND_VLM_API_KEY
+      api_key: null
+      temperature: 0.3
+      response_format: true
+  selector:
+    base_url: https://api.openai.com/v1
+    model: gpt-4.1
+    api_key_env: OPENAI_API_KEY
+    api_key: null
+    temperature: 0.0
+    response_format: true
+  verifier:
+    base_url: https://api.openai.com/v1
+    model: gpt-4.1
+    api_key_env: OPENAI_API_KEY
+    api_key: null
+    temperature: 0.0
+    response_format: true

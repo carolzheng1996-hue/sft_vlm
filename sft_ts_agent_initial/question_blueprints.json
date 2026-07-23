@@ -1,0 +1,509 @@
+[
+  {
+    "id": "profile_visual_route",
+    "category": "data_profile",
+    "input_mode": "image_text",
+    "requires_images": [
+      "figures/overview.png",
+      "figures/seasonal_profile.png",
+      "figures/anomaly_changepoint.png"
+    ],
+    "question": "请对这个时序数据集做一次建模前数据画像。你需要说明哪些结论可以从统计摘要得到，哪些必须结合图像工具判断，并给出推荐的工具调用顺序。",
+    "expected_trace": [
+      "load_timeseries_table",
+      "profile_timeseries",
+      "plot_overview",
+      "plot_seasonal_profile",
+      "detect_anomaly_changepoint"
+    ],
+    "answer_must_cover": [
+      "frequency",
+      "trend",
+      "seasonality",
+      "stationarity_hint",
+      "missingness",
+      "outlier_or_changepoint",
+      "image_needed_reason",
+      "next_modeling_step"
+    ]
+  },
+  {
+    "id": "profile_text_only_triage",
+    "category": "data_profile",
+    "input_mode": "text_only",
+    "requires_images": [],
+    "question": "只基于可见的元数据、字段说明和统计摘要，先做一次 text-only 体检：哪些风险可以直接判断，哪些需要后续调用图像或诊断工具确认？",
+    "expected_trace": [
+      "load_timeseries_table",
+      "profile_timeseries"
+    ],
+    "answer_must_cover": [
+      "directly_supported_findings",
+      "uncertain_findings",
+      "recommended_visual_checks",
+      "do_not_overclaim"
+    ]
+  },
+  {
+    "id": "seasonality_frequency_tool_choice",
+    "category": "data_profile",
+    "input_mode": "image_text",
+    "requires_images": [
+      "figures/overview.png",
+      "figures/seasonal_profile.png"
+    ],
+    "question": "请判断数据中可能存在的频率和季节性结构，并说明你会优先使用哪些统计/图像工具来确认它们。",
+    "expected_trace": [
+      "profile_timeseries",
+      "plot_seasonal_profile"
+    ],
+    "answer_must_cover": [
+      "base_frequency",
+      "candidate_periods",
+      "visual_confirmation",
+      "model_implication"
+    ]
+  },
+  {
+    "id": "missing_anomaly_decision",
+    "category": "data_quality",
+    "input_mode": "image_text",
+    "requires_images": [
+      "figures/missingness_heatmap.png",
+      "figures/anomaly_changepoint.png",
+      "figures/overview.png"
+    ],
+    "question": "请分析缺失、异常点和变点风险。哪些应作为业务事件保留，哪些可能需要修复或标记？请给出工具调用顺序和处理建议。",
+    "expected_trace": [
+      "analyze_missingness",
+      "detect_anomaly_changepoint",
+      "plot_overview"
+    ],
+    "answer_must_cover": [
+      "missing_pattern",
+      "outlier_type",
+      "changepoint_vs_spike",
+      "imputation_or_flagging",
+      "avoid_blind_deletion"
+    ]
+  },
+  {
+    "id": "similarity_grouping_strategy",
+    "category": "similarity_analysis",
+    "input_mode": "image_text",
+    "requires_images": [
+      "figures/small_multiples.png",
+      "figures/overview.png"
+    ],
+    "question": "如果要比较多条序列之间的共同模式、趋势一致性和方差/分布相似性，你会如何选择相似性工具和分组建模策略？",
+    "expected_trace": [
+      "profile_timeseries",
+      "plot_overview",
+      "similarity_search"
+    ],
+    "answer_must_cover": [
+      "shape_similarity",
+      "trend_alignment",
+      "variance_or_scale_handling",
+      "normalization",
+      "cluster_or_segment_use",
+      "global_vs_local_model_implication"
+    ]
+  },
+  {
+    "id": "residual_diagnostic_plan",
+    "category": "model_result_analysis",
+    "input_mode": "image_text",
+    "requires_images": [
+      "figures/residual_diagnostics.png"
+    ],
+    "question": "请基于预测结果做残差诊断：判断是否存在系统性偏差、遗漏季节性、异方差或区间校准问题，并给出下一轮改模建议。",
+    "expected_trace": [
+      "residual_diagnostics",
+      "plot_seasonal_profile"
+    ],
+    "answer_must_cover": [
+      "residual_bias",
+      "acf_or_seasonal_residual",
+      "heteroscedasticity",
+      "coverage_or_tail_risk",
+      "feature_or_model_fix"
+    ]
+  },
+  {
+    "id": "training_curve_and_retrain_rule",
+    "category": "model_result_analysis",
+    "input_mode": "text_only",
+    "requires_images": [],
+    "question": "假设你拿到了训练/验证曲线和最近窗口误差监控结果，请说明如何区分过拟合、欠拟合、数据漂移，并设计重训练触发规则。",
+    "expected_trace": [
+      "residual_diagnostics",
+      "drift_detection",
+      "rolling_backtest"
+    ],
+    "answer_must_cover": [
+      "overfit_signal",
+      "underfit_signal",
+      "drift_signal",
+      "trigger_thresholds",
+      "human_review_conditions"
+    ]
+  },
+  {
+    "id": "validation_metric_selection",
+    "category": "model_selection",
+    "input_mode": "text_only",
+    "requires_images": [],
+    "question": "请为这个预测任务选择合理的验证方式和主指标/辅指标，并指出哪些常见验证或指标选择会造成误导。",
+    "expected_trace": [
+      "profile_timeseries",
+      "rolling_backtest"
+    ],
+    "answer_must_cover": [
+      "rolling_origin",
+      "horizon_aware_metrics",
+      "business_cost",
+      "bad_metrics_or_splits",
+      "leakage_risk"
+    ]
+  },
+  {
+    "id": "model_shortlist_ranking",
+    "category": "model_selection",
+    "input_mode": "image_text",
+    "requires_images": [
+      "figures/overview.png",
+      "figures/seasonal_profile.png",
+      "figures/small_multiples.png"
+    ],
+    "question": "请根据数据模式和业务目标，从候选模型中给出 Top-3 模型/策略排序。每个选择都要说明适用原因、前置处理、验证方式和不选其他模型的理由。",
+    "expected_trace": [
+      "profile_timeseries",
+      "plot_overview",
+      "rolling_backtest"
+    ],
+    "answer_must_cover": [
+      "top3_models",
+      "why_each_model",
+      "preprocessing",
+      "validation",
+      "rejected_models"
+    ]
+  },
+  {
+    "id": "end_to_end_tool_plan",
+    "category": "end_to_end_agent",
+    "input_mode": "image_text",
+    "requires_images": [
+      "figures/overview.png",
+      "figures/small_multiples.png",
+      "figures/seasonal_profile.png",
+      "figures/missingness_heatmap.png",
+      "figures/anomaly_changepoint.png",
+      "figures/residual_diagnostics.png"
+    ],
+    "question": "你是时序建模 agent。请给出从数据读取、画像、质量检查、相似性分析、模型初选、验证设计到上线监控的完整工具调用计划，并基于当前可见结果给出初版结论。",
+    "expected_trace": [
+      "load_timeseries_table",
+      "profile_timeseries",
+      "analyze_missingness",
+      "plot_overview",
+      "plot_seasonal_profile",
+      "detect_anomaly_changepoint",
+      "similarity_search",
+      "rolling_backtest",
+      "residual_diagnostics",
+      "drift_detection"
+    ],
+    "answer_must_cover": [
+      "ordered_tool_plan",
+      "which_steps_need_images",
+      "initial_findings",
+      "model_strategy",
+      "monitoring_plan",
+      "uncertainties"
+    ]
+  },
+  {
+    "id": "visual_tool_selection_after_image",
+    "category": "tool_selection_visual",
+    "input_mode": "image_text",
+    "difficulty": "medium",
+    "requires_images": [
+      "figures/overview.png",
+      "figures/missingness_heatmap.png",
+      "figures/anomaly_changepoint.png"
+    ],
+    "question": "请观察已给出的图像结果，判断下一步还应该调用哪些图像/统计工具来确认数据模式。请区分：已经能由图像支持的结论、需要进一步工具验证的结论、以及不能仅凭图像下结论的内容。",
+    "tool_focus": [
+      "visualization",
+      "basic_time_series_analysis",
+      "trend_detection",
+      "statistics"
+    ],
+    "model_focus": [],
+    "expected_trace": [
+      "plot_overview",
+      "analyze_missingness",
+      "detect_anomaly_changepoint",
+      "profile_timeseries"
+    ],
+    "answer_must_cover": [
+      "image_supported_findings",
+      "next_visual_tool",
+      "next_stat_tool",
+      "unsupported_claims",
+      "tool_order_reason"
+    ]
+  },
+  {
+    "id": "foundation_model_routing",
+    "category": "model_selection",
+    "input_mode": "image_text",
+    "difficulty": "hard",
+    "requires_images": [
+      "figures/overview.png",
+      "figures/seasonal_profile.png"
+    ],
+    "question": "请在 Foundation Time-Series Models 和传统/深度时序模型之间做模型路由：哪些情况下优先试 Chronos/Chronos2/TimesFM/Moirai/Sundial/TimeMoE，哪些情况下应优先使用 TSL 模型或特征工程型 global forecaster？请结合当前数据图像和元数据给出排序。",
+    "tool_focus": [
+      "data_io",
+      "visualization",
+      "training_jobs"
+    ],
+    "model_focus": [
+      "Chronos",
+      "Chronos2",
+      "TimesFM",
+      "Moirai",
+      "Sundial",
+      "TimeMoE",
+      "PatchTST",
+      "TemporalFusionTransformer",
+      "TimesNet",
+      "DLinear"
+    ],
+    "expected_trace": [
+      "profile_timeseries",
+      "plot_overview",
+      "plot_seasonal_profile",
+      "rolling_backtest"
+    ],
+    "answer_must_cover": [
+      "foundation_model_fit",
+      "tsl_model_fit",
+      "data_size_and_frequency",
+      "covariate_handling",
+      "zero_shot_vs_finetune",
+      "top3_ranking"
+    ]
+  },
+  {
+    "id": "tsl_model_family_ranking",
+    "category": "model_selection",
+    "input_mode": "text_only",
+    "difficulty": "hard",
+    "requires_images": [],
+    "question": "请基于 metadata、统计摘要和业务目标，从 Time-Series-Library 候选模型中选择适合进入第一轮实验的模型族，并说明为什么某些 Transformer/linear/mixer/frequency 类模型不应盲目加入。",
+    "tool_focus": [
+      "basic_time_series_analysis",
+      "training_jobs"
+    ],
+    "model_focus": [
+      "Autoformer",
+      "FEDformer",
+      "Informer",
+      "PatchTST",
+      "DLinear",
+      "TimesNet",
+      "TSMixer",
+      "TimeMixer",
+      "iTransformer",
+      "TemporalFusionTransformer"
+    ],
+    "expected_trace": [
+      "profile_timeseries",
+      "rolling_backtest"
+    ],
+    "answer_must_cover": [
+      "candidate_families",
+      "model_budget",
+      "sequence_length_fit",
+      "covariate_fit",
+      "baseline_first",
+      "rejected_or_delayed_models"
+    ]
+  },
+  {
+    "id": "anomaly_detection_model_tool_chain",
+    "category": "tool_and_model_selection",
+    "input_mode": "image_text",
+    "difficulty": "hard",
+    "requires_images": [
+      "figures/anomaly_changepoint.png",
+      "figures/overview.png",
+      "figures/missingness_heatmap.png"
+    ],
+    "question": "如果当前任务从预测转为异常检测/监控，请设计工具调用链并选择候选异常检测模型或混合策略。请说明哪些图像证据会改变异常检测阈值、窗口长度和是否重训练。",
+    "tool_focus": [
+      "trend_detection",
+      "series_analysis",
+      "statistics",
+      "visualization"
+    ],
+    "model_focus": [
+      "KANAD",
+      "TimesNet",
+      "PatchTST",
+      "anomaly detector + forecasting hybrid",
+      "DLinear"
+    ],
+    "expected_trace": [
+      "detect_anomaly_changepoint",
+      "analyze_missingness",
+      "plot_overview",
+      "drift_detection",
+      "rolling_backtest"
+    ],
+    "answer_must_cover": [
+      "anomaly_type",
+      "threshold_strategy",
+      "window_length",
+      "model_candidates",
+      "forecasting_hybrid",
+      "image_evidence"
+    ]
+  },
+  {
+    "id": "image_text_conflict_resolution",
+    "category": "data_profile",
+    "input_mode": "image_text",
+    "difficulty": "hard",
+    "requires_images": [
+      "figures/overview.png",
+      "figures/seasonal_profile.png",
+      "figures/residual_diagnostics.png"
+    ],
+    "question": "如果统计摘要和图像观察出现冲突，例如统计上整体均值稳定但图像显示局部 level shift 或残差周期结构，你会如何裁决？请给出工具调用顺序、确认实验和最终答复策略。",
+    "tool_focus": [
+      "statistics",
+      "visualization",
+      "trend_detection",
+      "basic_time_series_analysis"
+    ],
+    "model_focus": [],
+    "expected_trace": [
+      "profile_timeseries",
+      "plot_overview",
+      "detect_anomaly_changepoint",
+      "residual_diagnostics"
+    ],
+    "answer_must_cover": [
+      "conflict_type",
+      "why_image_matters",
+      "confirmation_test",
+      "answer_caveat",
+      "modeling_consequence"
+    ]
+  },
+  {
+    "id": "tool_call_arguments_design",
+    "category": "tool_selection",
+    "input_mode": "text_only",
+    "difficulty": "medium",
+    "requires_images": [],
+    "question": "请把当前任务拆成一组可执行的工具调用，并为每个工具设计关键参数：输入表、time/id/target 字段、候选周期、异常敏感度、回测 horizon/cutoff、输出 artifact。",
+    "tool_focus": [
+      "data_io",
+      "visualization",
+      "statistics",
+      "trend_detection",
+      "training_jobs"
+    ],
+    "model_focus": [],
+    "expected_trace": [
+      "load_timeseries_table",
+      "profile_timeseries",
+      "plot_seasonal_profile",
+      "detect_anomaly_changepoint",
+      "rolling_backtest"
+    ],
+    "answer_must_cover": [
+      "tool_arguments",
+      "field_mapping",
+      "candidate_periods",
+      "horizon_and_cutoffs",
+      "artifact_outputs",
+      "parameter_rationale"
+    ]
+  },
+  {
+    "id": "forecasting_vs_classification_regression_route",
+    "category": "model_selection",
+    "input_mode": "text_only",
+    "difficulty": "medium",
+    "requires_images": [],
+    "question": "请判断当前问题应被建模为 forecasting、anomaly detection、classification 还是 regression。若业务方把它误表述成另一个任务，你会如何澄清目标、选择模型包和评估指标？",
+    "tool_focus": [
+      "data_io",
+      "statistics",
+      "reporting"
+    ],
+    "model_focus": [
+      "time-series-library",
+      "time-series-library-regression",
+      "foundation-timeseries"
+    ],
+    "expected_trace": [
+      "load_timeseries_table",
+      "profile_timeseries"
+    ],
+    "answer_must_cover": [
+      "task_formulation",
+      "target_definition",
+      "model_package_route",
+      "metric_route",
+      "clarifying_questions"
+    ]
+  },
+  {
+    "id": "model_result_failure_attribution",
+    "category": "model_result_analysis",
+    "input_mode": "image_text",
+    "difficulty": "hard",
+    "requires_images": [
+      "figures/residual_diagnostics.png",
+      "figures/overview.png",
+      "figures/seasonal_profile.png"
+    ],
+    "question": "一个候选模型在验证集上表现差。请基于图像和元数据判断失败更可能来自模型能力不足、特征/协变量缺失、数据质量、验证设计错误还是分布漂移，并给出下一步实验矩阵。",
+    "tool_focus": [
+      "visualization",
+      "basic_time_series_analysis",
+      "training_jobs",
+      "statistics"
+    ],
+    "model_focus": [
+      "DLinear",
+      "PatchTST",
+      "TemporalFusionTransformer",
+      "TimesFM",
+      "Chronos",
+      "LightGBM/CatBoost global forecaster"
+    ],
+    "expected_trace": [
+      "residual_diagnostics",
+      "plot_overview",
+      "plot_seasonal_profile",
+      "rolling_backtest",
+      "drift_detection"
+    ],
+    "answer_must_cover": [
+      "failure_hypotheses",
+      "evidence_from_images",
+      "diagnostic_tools",
+      "experiment_matrix",
+      "stop_or_retrain_rule"
+    ]
+  }
+]

@@ -1,0 +1,47 @@
+version: 1.0
+dimensions:
+  task: [data_profile, similarity_analysis, model_result_analysis, model_selection, tool_use]
+  subtask: task_pool.yaml 中定义的 58 个细粒度任务
+  series_count: [single, multiple]
+  history_length: [short, long]
+  task_goal: [forecast, point_anomaly_detection, sequence_anomaly_detection, diagnosis, monitoring_retraining]
+  input_mode: [text_only, image_text]
+  recommended_mode: [text_only, text_then_image, image_text]
+  image_value: [low, medium, high]
+  difficulty: [medium, hard]
+required_coverage:
+  axes: [task, subtask, series_count, history_length, input_mode, recommended_mode]
+  pairings:
+    - [task, input_mode]
+    - [series_count, history_length]
+  every_task_pool_entry: true
+  every_tool_in_task_pool: true
+  every_subtask_both_modalities: false
+  every_parent_task_both_modalities: true
+target_distribution:
+  task:
+    data_profile: 0.25
+    similarity_analysis: 0.18
+    model_result_analysis: 0.20
+    model_selection: 0.22
+    tool_use: 0.15
+  series_count: {single: 0.50, multiple: 0.50}
+  history_length: {short: 0.35, long: 0.65}
+  image_value: {low: 0.15, medium: 0.25, high: 0.60}
+  modality_sampling:
+    note: 比例为覆盖约束满足后的目标分布；paired 表示同一场景同时生成两种模态。
+    low: {text_only: 0.75, image_text: 0.10, paired: 0.15}
+    medium: {text_only: 0.30, image_text: 0.30, paired: 0.40}
+    high: {text_only: 0.10, image_text: 0.75, paired: 0.15}
+minimum_question_rules:
+  minimum_user_request_characters: 60
+  maximum_user_request_characters: 360
+  minimum_decision_points_medium: 2
+  minimum_decision_points_hard: 3
+  require_business_constraint: true
+  forbid_answer_blueprint: true
+  require_grounded_numbers_and_fact_paths: true
+  require_modality_neutral_wording: true
+future_scope:
+  dataset_address_agent_trajectories: false
+  note: 第一版不构造用户仅提供数据集地址的完整多轮工具调用场景。

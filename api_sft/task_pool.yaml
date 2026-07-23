@@ -1,0 +1,456 @@
+version: 2.0
+description: 细粒度时序 Question 任务池。每个条目定义分析重点、工具候选、模态策略和答案要求。
+
+task_difficulty:
+  default: medium
+  hard:
+    - profile_seasonality_variants
+    - profile_missingness_patterns
+    - profile_anomaly_types
+    - profile_change_variance_drift
+    - profile_scale_variance_heterogeneity
+    - similarity_phase_dtw
+    - similarity_lag_lead
+    - similarity_distribution_not_shape
+    - similarity_clustering_representative
+    - similarity_anomalous_series
+    - similarity_motif_local
+    - similarity_global_local_model
+    - result_omitted_seasonality
+    - result_autocorrelation_whiteness
+    - result_heteroscedasticity
+    - result_interval_calibration
+    - result_training_dynamics
+    - result_data_concept_drift
+    - result_retrain_rollback_review
+    - selection_periodicity
+    - selection_nonstationary_change
+    - selection_probabilistic_interval
+    - selection_anomaly_task
+    - selection_hierarchy_reconciliation
+    - selection_foundation_supervised
+    - selection_global_local_grouped
+    - tool_stationarity_period_order
+    - tool_similarity_choice
+    - tool_anomaly_change_order
+    - tool_normalize_before_similarity
+    - tool_image_needs_statistics
+    - tool_conflicting_results
+    - tool_hard_negative
+
+tasks:
+  # 数据画像任务池（10）
+  - id: profile_schema_frequency_index
+    parent_task: data_profile
+    title: 字段、频率与时间索引质量检查
+    instruction: 检查时间列、序列标识、数值字段、重复时间戳、时间间隔和频率一致性，判断是否需要转换为标准时序格式。
+    preferred_tools: [data_scan, data_profile, data_quality_check, data_convert, list_channels]
+    image_policy: low
+    required_elements: [schema判断, 频率判断, 时间索引风险, 数据转换条件, 后续分析入口]
+  - id: profile_trend_types
+    parent_task: data_profile
+    title: 线性、非线性与局部趋势
+    instruction: 区分全局线性趋势、非线性趋势和局部窗口趋势，说明视觉判断与斜率或分解验证如何配合。
+    preferred_tools: [series_overview, Trend_linear, STL, plot]
+    image_policy: high
+    required_elements: [全局趋势, 局部趋势, 非线性可能性, 检验方法, 建模影响]
+  - id: profile_stationarity_differencing
+    parent_task: data_profile
+    title: 平稳性与差分需求
+    instruction: 判断当前证据能否支持平稳性结论，设计 ADF、趋势处理和差分检查顺序，并避免机械差分。
+    preferred_tools: [channel_stats, adf_test, Trend_linear, STL, plot]
+    image_policy: medium
+    required_elements: [平稳性假设, ADF解释, 差分条件, 过度差分风险, 模型影响]
+  - id: profile_seasonality_variants
+    parent_task: data_profile
+    title: 单周期、多周期与时变季节性
+    instruction: 识别单周期、多周期及随时间变化的季节结构，交叉使用 ACF、FFT、季节检测和 STL，不能凭单个频谱峰定论。
+    preferred_tools: [compute_acf, detect_periodicity, seasonality_detector, FFT, STL, plot]
+    image_policy: high
+    required_elements: [候选周期, 多周期判断, 时变性, 交叉验证, 建模影响]
+  - id: profile_missingness_patterns
+    parent_task: data_profile
+    title: 随机、连续与同步缺失
+    instruction: 区分随机缺失、连续块缺失和多序列同步缺失，决定是否插补、标记或保留，并避免用单一缺失率概括位置结构。
+    preferred_tools: [data_quality_check, series_overview, ts_imputation, plot]
+    image_policy: high
+    required_elements: [缺失类型, 位置结构, 插补条件, 缺失标记, 偏差风险]
+  - id: profile_anomaly_types
+    parent_task: data_profile
+    title: 点异常、上下文异常与异常簇
+    instruction: 区分孤立点异常、依赖周期或业务上下文的异常和连续异常簇，设计检测、复核和处理顺序。
+    preferred_tools: [find_peaks, outlier_clipper, cpt_detector, channel_values, plot]
+    image_policy: high
+    required_elements: [异常类型, 上下文依赖, 异常簇, 业务复核, 避免盲目删除]
+  - id: profile_change_variance_drift
+    parent_task: data_profile
+    title: 均值变点、方差变点与缓慢漂移
+    instruction: 区分突然的均值变化、波动性变化和逐步漂移，并说明变点检测、趋势检验和窗口比较的角色。
+    preferred_tools: [cpt_detector, Trend_linear, summary_stats, plot]
+    image_policy: high
+    required_elements: [均值变化, 方差变化, 缓慢漂移, 检测顺序, 训练窗口影响]
+  - id: profile_intermittent_longtail
+    parent_task: data_profile
+    title: 间歇性、零膨胀与长尾分布
+    instruction: 分析零值比例、非零间隔、偏度、峰度和长尾风险，区分真实零需求与缺失或截断，并连接到指标和模型选择。
+    preferred_tools: [summary_stats, shape_distri, plot_univariate_distribution, plot]
+    image_policy: medium
+    required_elements: [零值语义, 间歇性, 长尾, 指标风险, 模型影响]
+  - id: profile_scale_variance_heterogeneity
+    parent_task: data_profile
+    title: 多序列尺度与方差异质性
+    instruction: 比较不同序列的量级、方差和信噪比，判断是否需要标准化、分组或加权训练。
+    preferred_tools: [series_overview, channel_stats, summary_stats, plot]
+    image_policy: high
+    required_elements: [尺度差异, 方差差异, 标准化, 分组策略, 评估加权]
+  - id: profile_modality_sufficiency
+    parent_task: data_profile
+    title: 文本画像是否充分与补图决策
+    instruction: 评估结构化摘要是否已经足够；若不足，只选择信息增益最高的图，并说明不应无目的生成哪些图。
+    preferred_tools: [data_profile, data_quality_check, plot, plot_univariate_distribution]
+    image_policy: conditional
+    required_elements: [文本可回答项, 不确定项, 最小充分图像, 图像信息增益, 停止条件]
+
+  # 相似性分析任务池（11）
+  - id: similarity_raw_trend_alignment
+    parent_task: similarity_analysis
+    title: 原始尺度下的趋势一致性
+    instruction: 在保留原始量级的情况下比较趋势方向和变化同步性，区分共同趋势与水平差异。
+    preferred_tools: [series_overview, Trend_linear, pear_cross_correlation, plot]
+    image_policy: high
+    required_elements: [趋势方向, 同步性, 水平差异, 相关性限制, 分组含义]
+  - id: similarity_normalized_shape
+    parent_task: similarity_analysis
+    title: 标准化后的形状相似性
+    instruction: 判断尺度差异是否掩盖共同形状，说明何时标准化、采用何种标准化及其可能丢失的业务信息。
+    preferred_tools: [summary_stats, series_overview, plot, dtw_distance]
+    image_policy: high
+    required_elements: [标准化前比较, 标准化后形状, 方法选择, 信息损失, 建模分组]
+  - id: similarity_pearson_spearman
+    parent_task: similarity_analysis
+    title: Pearson 与 Spearman 选择
+    instruction: 根据线性关系、单调非线性、异常点和分布特征选择 Pearson 或 Spearman，并避免把相关解释为因果。
+    preferred_tools: [shape_distri, pear_cross_correlation, spear_cross_correlation, causal, plot]
+    image_policy: medium
+    required_elements: [线性假设, 单调关系, 异常敏感性, 两种系数比较, 非因果声明]
+  - id: similarity_phase_dtw
+    parent_task: similarity_analysis
+    title: 相位错位与 DTW
+    instruction: 判断序列是否因相位或速度差异而需要 DTW，说明调用前的缺失处理、尺度处理和 DTW 不适用条件。
+    preferred_tools: [data_quality_check, summary_stats, dtw_distance, plot]
+    image_policy: high
+    required_elements: [错位证据, DTW前置处理, 距离解释, 计算成本, 不适用条件]
+  - id: similarity_lag_lead
+    parent_task: similarity_analysis
+    title: 滞后相关与领先滞后关系
+    instruction: 比较不同滞后下的相关关系，识别可能的领先或滞后序列，同时强调时间顺序和非因果边界。
+    preferred_tools: [channel_values, compute_acf, pear_cross_correlation, causal, plot]
+    image_policy: high
+    required_elements: [候选滞后, 领先滞后方向, 稳健性检查, 泄漏风险, 非因果声明]
+  - id: similarity_distribution_not_shape
+    parent_task: similarity_analysis
+    title: 分布相似但时序形状不同
+    instruction: 构造并识别均值方差和分布近似、但时间排列与动态结构不同的序列，说明为何分布统计不足。
+    preferred_tools: [summary_stats, shape_distri, compute_acf, dtw_distance, plot]
+    image_policy: high
+    required_elements: [分布相似证据, 动态差异, 顺序信息, 合适工具, 错误分组风险]
+  - id: similarity_shape_variance_difference
+    parent_task: similarity_analysis
+    title: 形状相似但方差不同
+    instruction: 分析共同形状与波动强度差异，判断标准化、加权距离和异方差建模的必要性。
+    preferred_tools: [summary_stats, series_overview, pear_cross_correlation, plot]
+    image_policy: high
+    required_elements: [共同形状, 方差差异, 标准化影响, 距离选择, 模型影响]
+  - id: similarity_clustering_representative
+    parent_task: similarity_analysis
+    title: 序列聚类与代表序列选择
+    instruction: 设计从特征、距离到聚类和代表序列选择的流程，说明簇数、离群序列和稳定性验证。
+    preferred_tools: [tsfresh_extractor, summary_stats, dtw_distance, plot]
+    image_policy: high
+    required_elements: [特征或距离, 聚类策略, 代表序列, 稳定性, 离群处理]
+  - id: similarity_anomalous_series
+    parent_task: similarity_analysis
+    title: 多序列中的异常序列识别
+    instruction: 从一组序列中识别整体模式不一致的异常序列，并区分异常序列与单条序列中的点异常。
+    preferred_tools: [series_overview, summary_stats, dtw_distance, cpt_detector, plot]
+    image_policy: high
+    required_elements: [群体基准, 异常序列证据, 点异常区别, 距离阈值, 复核方式]
+  - id: similarity_motif_local
+    parent_task: similarity_analysis
+    title: 子序列 motif 与局部相似性
+    instruction: 寻找只在局部窗口出现的重复模式，区分全局不相似与局部 motif 相似，并处理窗口长度和多重匹配。
+    preferred_tools: [channel_values, dtw_distance, find_peaks, plot]
+    image_policy: high
+    required_elements: [窗口选择, motif定义, 局部距离, 多重匹配, 全局局部区别]
+  - id: similarity_global_local_model
+    parent_task: similarity_analysis
+    title: 根据相似组选择全局或局部模型
+    instruction: 将相似性结果转化为全局模型、分组模型或局部模型决策，并设计按组回测验证收益。
+    preferred_tools: [series_overview, dtw_distance, feature_generate, plot]
+    image_policy: medium
+    required_elements: [相似组, 全局模型条件, 局部模型条件, 分组策略, 按组回测]
+
+  # 模型结果分析任务池（12）
+  - id: result_residual_mean_bias
+    parent_task: model_result_analysis
+    title: 残差均值偏离零
+    instruction: 检查整体及分组残差偏差，判断系统性高估或低估，并连接到校准、损失函数和业务代价。
+    preferred_tools: [summary_stats, channel_stats, plot]
+    image_policy: medium
+    required_elements: [偏差方向, 分组偏差, 显著性, 校准方案, 业务代价]
+  - id: result_omitted_seasonality
+    parent_task: model_result_analysis
+    title: 残差遗漏周期
+    instruction: 判断残差中是否仍有周期结构，交叉解释残差图、ACF、FFT 和季节检测结果，并提出特征或模型修正。
+    preferred_tools: [compute_acf, FFT, seasonality_detector, STL, plot]
+    image_policy: high
+    required_elements: [残差周期, 候选滞后, 交叉验证, 遗漏原因, 改模建议]
+  - id: result_autocorrelation_whiteness
+    parent_task: model_result_analysis
+    title: 残差自相关与白噪声检验
+    instruction: 结合 ACF 与 Ljung-Box 判断残差是否近似白噪声，说明样本长度、多重滞后和检验显著性的限制。
+    preferred_tools: [compute_acf, white_noise_test, plot]
+    image_policy: high
+    required_elements: [ACF解释, 白噪声检验, 滞后选择, 显著性限制, 模型充分性]
+  - id: result_heteroscedasticity
+    parent_task: model_result_analysis
+    title: 残差异方差
+    instruction: 识别残差方差随时间、预测值或序列分组变化的情况，并提出变换、加权损失或概率模型方案。
+    preferred_tools: [summary_stats, shape_distri, plot]
+    image_policy: high
+    required_elements: [异方差证据, 条件方差, 数据变换, 损失调整, 区间影响]
+  - id: result_tail_extremes
+    parent_task: model_result_analysis
+    title: 极端值与尾部误差
+    instruction: 分析尾部误差、极端事件和常规平均指标之间的冲突，设计分位数或事件加权评估。
+    preferred_tools: [summary_stats, shape_distri, plot_univariate_distribution, plot]
+    image_policy: medium
+    required_elements: [尾部定义, 极端误差, 平均指标局限, 分位数指标, 业务风险]
+  - id: result_horizon_degradation
+    parent_task: model_result_analysis
+    title: 不同 horizon 的误差退化
+    instruction: 比较不同预测步长上的误差和区间覆盖，判断性能是否随 horizon 合理退化或存在特定步长失败。
+    preferred_tools: [summary_stats, plot]
+    image_policy: high
+    required_elements: [按horizon指标, 退化形态, 特定步长风险, 验证切分, 改模方向]
+  - id: result_group_error
+    parent_task: model_result_analysis
+    title: 不同序列与业务分组的误差差异
+    instruction: 比较不同序列或业务组的误差、偏差和稳定性，避免总体指标掩盖弱势分组。
+    preferred_tools: [series_overview, summary_stats, plot]
+    image_policy: high
+    required_elements: [分组指标, 弱势分组, 样本量, 公平比较, 分组改模]
+  - id: result_interval_calibration
+    parent_task: model_result_analysis
+    title: 预测区间覆盖率与校准
+    instruction: 检查总体、horizon 和分组覆盖率及区间宽度，区分区间过窄、过宽与分布漂移。
+    preferred_tools: [summary_stats, plot]
+    image_policy: high
+    required_elements: [名义覆盖率, 实际覆盖率, 区间宽度, 条件校准, 校准方案]
+  - id: result_training_dynamics
+    parent_task: model_result_analysis
+    title: 过拟合、欠拟合与训练震荡
+    instruction: 根据训练和验证曲线区分过拟合、欠拟合和优化震荡，提出早停、正则化、容量或优化器调整。
+    preferred_tools: [plot, report_export]
+    image_policy: high
+    required_elements: [问题类型, 出现阶段, 诊断证据, 修正策略, 重新验证]
+  - id: result_data_concept_drift
+    parent_task: model_result_analysis
+    title: 数据漂移与概念漂移区分
+    instruction: 结合输入分布、数据质量和误差变化区分数据漂移、标签关系变化与管道故障。
+    preferred_tools: [data_quality_check, summary_stats, cpt_detector, plot]
+    image_policy: high
+    required_elements: [输入漂移, 误差漂移, 概念漂移假设, 管道故障, 复核实验]
+  - id: result_model_tradeoff
+    parent_task: model_result_analysis
+    title: 模型准确率、稳定性与成本权衡
+    instruction: 比较多个模型的准确率、跨窗口稳定性、训练推理成本和失败风险，不能只按单一平均指标排序。
+    preferred_tools: [summary_stats, report_export, register_artifact, plot]
+    image_policy: medium
+    required_elements: [准确率, 稳定性, 成本, 业务代价, 最终选择]
+  - id: result_retrain_rollback_review
+    parent_task: model_result_analysis
+    title: 重训练、回滚与人工复核规则
+    instruction: 设计连续窗口触发、冷却期、重训练验证、灰度发布、回滚和人工复核规则，避免单点超阈值即重训。
+    preferred_tools: [data_quality_check, cpt_detector, report_export, register_artifact, plot]
+    image_policy: medium
+    required_elements: [触发阈值, 连续窗口, 冷却期, 回滚条件, 人工复核]
+
+  # 模型选择任务池（13）
+  - id: selection_history_length
+    parent_task: model_selection
+    title: 短历史与长历史模型选择
+    instruction: 根据历史长度、周期覆盖数和样本有效量选择简单基线、可训练模型或基础模型，控制复杂度。
+    preferred_tools: [data_profile, series_overview, detect_periodicity, arima_forecast]
+    image_policy: medium
+    required_elements: [有效历史, 周期覆盖, baseline, 复杂度约束, 验证方案]
+  - id: selection_single_panel
+    parent_task: model_selection
+    title: 单序列与多序列 panel
+    instruction: 比较单序列局部模型与多序列全局模型的样本效率、共享模式和负迁移风险。
+    preferred_tools: [data_profile, series_overview, feature_generate, plot]
+    image_policy: high
+    required_elements: [单序列策略, panel策略, 参数共享, 负迁移, 按组验证]
+  - id: selection_uni_multivariate
+    parent_task: model_selection
+    title: 单变量与多变量模型
+    instruction: 判断额外变量是否提供预测增益，检查变量可用时间、共线性和泄漏，再选择单变量或多变量模型。
+    preferred_tools: [data_profile, pear_cross_correlation, spear_cross_correlation, feature_generate]
+    image_policy: medium
+    required_elements: [变量可用性, 增益假设, 共线性, 泄漏, 消融验证]
+  - id: selection_future_covariates
+    parent_task: model_selection
+    title: 已知与未知未来协变量
+    instruction: 区分预测时真正已知的未来变量、需要先预测的变量和事后变量，避免训练服务偏差与泄漏。
+    preferred_tools: [data_profile, data_quality_check, feature_generate]
+    image_policy: low
+    required_elements: [已知未来变量, 未知未来变量, 事后变量, 泄漏, 推理接口]
+  - id: selection_periodicity
+    parent_task: model_selection
+    title: 单周期与多周期模型选择
+    instruction: 根据单周期、多周期及周期稳定性比较季节基线、线性分解、patch 模型和基础模型。
+    preferred_tools: [detect_periodicity, seasonality_detector, FFT, STL, arima_forecast]
+    image_policy: high
+    required_elements: [周期结构, 季节基线, 候选模型, 周期变化, 回测]
+  - id: selection_nonstationary_change
+    parent_task: model_selection
+    title: 趋势、变点与非平稳模型选择
+    instruction: 根据趋势、变点和漂移选择差分、分解、局部窗口、非平稳模型或重训练策略。
+    preferred_tools: [adf_test, Trend_linear, cpt_detector, STL, plot]
+    image_policy: high
+    required_elements: [非平稳来源, 变点, 训练窗口, 候选模型, 稳健验证]
+  - id: selection_intermittent
+    parent_task: model_selection
+    title: 间歇性需求模型选择
+    instruction: 根据零值比例和非零间隔比较 SeasonalNaive、Croston/TSB、零膨胀与概率模型，并选择合适指标。
+    preferred_tools: [summary_stats, shape_distri, plot_univariate_distribution]
+    image_policy: medium
+    required_elements: [间歇性判断, baseline, 候选模型, 指标, 库存业务目标]
+  - id: selection_probabilistic_interval
+    parent_task: model_selection
+    title: 概率预测与区间预测
+    instruction: 根据不确定性和错误代价决定点预测、分位数或完整概率预测，并设计覆盖率与区间宽度评估。
+    preferred_tools: [data_profile, summary_stats, plot]
+    image_policy: medium
+    required_elements: [不确定性目标, 分位数, 区间模型, 校准指标, 业务代价]
+  - id: selection_anomaly_task
+    parent_task: model_selection
+    title: 点异常与序列异常检测模型
+    instruction: 区分单时间点异常、连续区间异常和整条序列异常，为不同粒度选择统计、重构、预测或表示学习模型。
+    preferred_tools: [find_peaks, cpt_detector, outlier_clipper, tsfresh_extractor, plot]
+    image_policy: high
+    required_elements: [异常粒度, baseline, 模型候选, 标签需求, 评估指标]
+  - id: selection_hierarchy_reconciliation
+    parent_task: model_selection
+    title: 层级预测与 reconciliation
+    instruction: 根据聚合层级、一致性要求和各层样本量选择 bottom-up、top-down 或 MinT 类 reconciliation 策略。
+    preferred_tools: [data_profile, series_overview, feature_generate]
+    image_policy: medium
+    required_elements: [层级定义, 基础预测, reconciliation, 一致性, 分层评估]
+  - id: selection_foundation_supervised
+    parent_task: model_selection
+    title: 基础模型 zero-shot 与监督训练模型
+    instruction: 比较时序基础模型 zero-shot/few-shot 与监督训练模型的冷启动、适配成本、协变量能力和领域偏移风险。
+    preferred_tools: [data_profile, series_overview, arima_forecast]
+    image_policy: medium
+    required_elements: [zero-shot基线, 监督候选, 领域偏移, 适配成本, 公平回测]
+  - id: selection_operational_constraints
+    parent_task: model_selection
+    title: 高解释性、低延迟与低算力约束
+    instruction: 在准确率之外加入解释性、训练预算、推理延迟、内存和维护成本，给出可部署的模型排序。
+    preferred_tools: [data_profile, feature_generate, report_export]
+    image_policy: low
+    required_elements: [解释性, 延迟, 算力, 维护成本, 降级方案]
+  - id: selection_global_local_grouped
+    parent_task: model_selection
+    title: 全局、局部与分组模型
+    instruction: 根据序列间共享模式、异质性、历史长度和规模选择全局、局部或分组模型，并通过分组回测验证。
+    preferred_tools: [series_overview, dtw_distance, tsfresh_extractor, feature_generate, plot]
+    image_policy: high
+    required_elements: [共享模式, 异质性, 三种策略, 负迁移, 分组回测]
+
+  # 工具使用任务池（12）
+  - id: tool_minimal_sufficient_chain
+    parent_task: tool_use
+    title: 最小充分工具链
+    instruction: 在多个可用工具中选择最短但证据充分的调用链，明确每一步的前置输入、停止条件和不调用的工具。
+    preferred_tools: [data_scan, data_profile, data_quality_check, series_overview, plot]
+    image_policy: conditional
+    required_elements: [最小工具集, 调用顺序, 前置依赖, 停止条件, 不调用理由]
+  - id: tool_profile_only
+    parent_task: tool_use
+    title: 什么时候只用 data_profile
+    instruction: 判断 schema、规模和基础质量问题何时仅靠 data_profile 即可回答，以及出现什么不确定性才继续调用其他工具。
+    preferred_tools: [data_profile, data_quality_check, data_convert]
+    image_policy: low
+    required_elements: [可直接回答项, data_profile边界, 继续条件, 数据转换, 避免过度调用]
+  - id: tool_plot_required
+    parent_task: tool_use
+    title: 什么时候必须调用 plot
+    instruction: 判断时间位置、局部形态或多序列关系何时无法由汇总统计表达，并只选择信息增益最高的图。
+    preferred_tools: [data_profile, series_overview, plot, plot_univariate_distribution, register_artifact]
+    image_policy: high
+    required_elements: [文本不足, 图像目标, 图类型, 信息增益, 图后验证]
+  - id: tool_stationarity_period_order
+    parent_task: tool_use
+    title: ADF、FFT、ACF 与 STL 顺序
+    instruction: 根据趋势、周期候选和平稳性问题设计 ADF、FFT、ACF、STL 的合理顺序，解释为何不能固定机械调用。
+    preferred_tools: [adf_test, FFT, compute_acf, STL, seasonality_detector, detect_periodicity]
+    image_policy: medium
+    required_elements: [问题分解, 工具顺序, 输入条件, 结果冲突, 停止条件]
+  - id: tool_similarity_choice
+    parent_task: tool_use
+    title: Pearson、Spearman 与 DTW 选择
+    instruction: 根据线性、单调、异常点、尺度和时间错位选择 Pearson、Spearman 或 DTW，并给出拒绝其他工具的理由。
+    preferred_tools: [pear_cross_correlation, spear_cross_correlation, dtw_distance, summary_stats, plot]
+    image_policy: medium
+    required_elements: [关系类型, 尺度处理, 错位处理, 工具选择, 拒绝理由]
+  - id: tool_missing_imputation
+    parent_task: tool_use
+    title: 缺失分析后是否插补
+    instruction: 先识别缺失模式和位置，再决定前向、线性、样条、季节插补、保留缺失或添加缺失标记。
+    preferred_tools: [data_quality_check, ts_imputation, plot]
+    image_policy: high
+    required_elements: [缺失模式, 插补必要性, 方法选择, 泄漏风险, 插补验证]
+  - id: tool_anomaly_change_order
+    parent_task: tool_use
+    title: 异常检测与变点检测顺序
+    instruction: 区分局部峰值、离群点和结构变点，设计 find_peaks、outlier_clipper 与 cpt_detector 的调用和复核顺序。
+    preferred_tools: [find_peaks, outlier_clipper, cpt_detector, channel_values, plot]
+    image_policy: high
+    required_elements: [异常与变点区别, 工具顺序, 参数风险, 业务复核, 处理动作]
+  - id: tool_normalize_before_similarity
+    parent_task: tool_use
+    title: 先标准化还是先比较相似性
+    instruction: 根据量级是否具有业务意义决定原始尺度比较与标准化顺序，并防止标准化掩盖重要方差差异。
+    preferred_tools: [summary_stats, channel_stats, pear_cross_correlation, dtw_distance, plot]
+    image_policy: high
+    required_elements: [原始尺度意义, 标准化条件, 方法, 信息损失, 双视角比较]
+  - id: tool_image_needs_statistics
+    parent_task: tool_use
+    title: 图像后是否仍需统计检验
+    instruction: 判断图像中的趋势、周期、异常和相关模式分别需要哪些统计工具确认，以及什么情况下视觉证据已经足够用于下一步而非最终定论。
+    preferred_tools: [Trend_linear, seasonality_detector, adf_test, cpt_detector, pear_cross_correlation, plot]
+    image_policy: high
+    required_elements: [视觉证据, 待确认假设, 检验工具, 显著性限制, 决策边界]
+  - id: tool_avoid_unnecessary_plot
+    parent_task: tool_use
+    title: 统计摘要充分时避免画图
+    instruction: 识别字段、样本量、明确缺失率、部署约束和接口兼容性等不需要图像的问题，避免装饰性绘图。
+    preferred_tools: [data_profile, data_quality_check, list_channels]
+    image_policy: low
+    required_elements: [摘要充分项, 图像低收益, 不画图理由, 后续触发条件, 成本意识]
+  - id: tool_conflicting_results
+    parent_task: tool_use
+    title: 工具结果冲突时继续分析
+    instruction: 处理 ADF、ACF、FFT、STL、相关性或变点工具给出冲突信号的情况，设计数据检查、参数敏感性和替代检验。
+    preferred_tools: [data_quality_check, adf_test, compute_acf, FFT, STL, seasonality_detector, report_export]
+    image_policy: medium
+    required_elements: [冲突定位, 数据检查, 参数敏感性, 替代解释, 保守结论]
+  - id: tool_hard_negative
+    parent_task: tool_use
+    title: 错误工具与错误顺序 hard negative
+    instruction: 识别给定方案中的虚构工具、无前置数据检查、先插补后检查缺失、把相关当因果或无目的调用全部工具等错误，并给出修正链。
+    preferred_tools: [data_scan, data_profile, data_quality_check, causal, report_export, register_artifact]
+    image_policy: conditional
+    required_elements: [错误工具, 顺序错误, 证据越界, 修正工具链, hard_negative理由]
