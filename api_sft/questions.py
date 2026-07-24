@@ -16,12 +16,12 @@ from .signal_generator import GENERATOR_VERSION
 QUESTION_SPEC_VERSION = "4.0"
 QUESTION_WRITER_PROMPT_ID = "question_writer_v3"
 QUESTION_CONTRACT_VERSION = "3"
-QUESTION_RUNTIME_FORMAT_VERSION = "question_runtime_v1"
+QUESTION_RUNTIME_FORMAT_VERSION = "question_runtime_v2"
 QUESTION_AUDIT_FORMAT_VERSION = "question_generation_audit_v1"
-TOOL_EXECUTION_SYSTEM_PROMPT_ID = "tsa_tool_execution_v2"
 QUESTION_MESSAGE_FORMAT = "neutral_local_images_v1"
 COVERAGE_REPORT_NAME = "coverage_report.json"
-TOOL_EXECUTION_SYSTEM_PROMPT = (Path(__file__).with_name("prompts") / "tool_execution_system.txt").read_text(encoding="utf-8").strip()
+TOOL_EXECUTION_SYSTEM_PROMPT_PATH = Path(__file__).with_name("prompts") / "tool_execution_system.txt"
+TOOL_EXECUTION_SYSTEM_PROMPT = TOOL_EXECUTION_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
 QUESTION_RUNTIME_KEYS = {"id", "format_version", "spec_ref", "task", "prompt", "resources", "allowed_tools"}
 
 TOOL_FOCUS = {
@@ -453,7 +453,6 @@ def build_question_specs(
                 "image_should_answer": ["时间位置和局部形态", "跨序列形状与相位关系"] if image_value != "low" else [],
                 "requires_statistical_confirmation": ["周期与平稳性", "异常与变点显著性", "相关而非因果"],
                 "model_catalog_scope": _model_catalog_scope(task_spec, scenario["task_goal"]),
-                "system_prompt_id": TOOL_EXECUTION_SYSTEM_PROMPT_ID,
                 "system_prompt": TOOL_EXECUTION_SYSTEM_PROMPT,
                 "message_format": QUESTION_MESSAGE_FORMAT,
                 "trajectory_requirement": "tool_execution",
@@ -615,7 +614,7 @@ def materialize_question_record(
             "model_catalog_scope": spec.get("model_catalog_scope", "none"),
         },
         "prompt": {
-            "system_prompt_id": spec.get("system_prompt_id", TOOL_EXECUTION_SYSTEM_PROMPT_ID),
+            "system_prompt": TOOL_EXECUTION_SYSTEM_PROMPT,
             "user_request": generation["user_request"],
         },
         "resources": {
@@ -843,6 +842,8 @@ def generate_questions(
             spec
             and set(row) == QUESTION_RUNTIME_KEYS
             and row.get("format_version") == QUESTION_RUNTIME_FORMAT_VERSION
+            and set(row.get("prompt", {})) == {"system_prompt", "user_request"}
+            and row.get("prompt", {}).get("system_prompt") == TOOL_EXECUTION_SYSTEM_PROMPT
             and row.get("spec_ref", {}).get("version") == spec.get("question_spec_version")
             and row.get("spec_ref", {}).get("hash") == spec.get("question_spec_hash")
             and audit.get("format_version") == QUESTION_AUDIT_FORMAT_VERSION

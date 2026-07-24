@@ -635,9 +635,9 @@ flowchart TD
 - `conditional`：训练动态、漂移诊断、重训练与回滚。
 - `not_required`：其他画像、相似性诊断和工具使用任务。
 
-每条记录使用 `system_prompt_id=tsa_tool_execution_v2` 和 `trajectory_requirement=tool_execution`。
+每条记录直接读取 `prompts/tool_execution_system.txt`，将完整内容保存到 `system_prompt`，并使用 `trajectory_requirement=tool_execution`。不再使用没有实际提示词映射作用的 `system_prompt_id`。
 
-QuestionSpec 4.0 额外保存 `question_spec_hash`，由 V4 场景 hash、细粒度任务、模态、证据包、图片清单和 System Prompt 版本确定。旧版问题不跨协议复用。
+QuestionSpec 4.0 额外保存 `question_spec_hash`，由 V4 场景 hash、细粒度任务、模态、证据包、图片清单和 System Prompt 内容确定。旧版问题不跨协议复用。
 
 ### 7.2 `generate-questions`
 
@@ -710,7 +710,7 @@ Question Writer 使用独立的 `prompts/question_writer_system.txt`，它不等
 ```json
 {
   "id": "scenario_00001_q01_text_only",
-  "format_version": "question_runtime_v1",
+  "format_version": "question_runtime_v2",
   "spec_ref": {"version": "4.0", "hash": "..."},
   "task": {
     "category": "data_profile",
@@ -719,7 +719,7 @@ Question Writer 使用独立的 `prompts/question_writer_system.txt`，它不等
     "input_mode": "text_only",
     "model_catalog_scope": "none"
   },
-  "prompt": {"system_prompt_id": "tsa_tool_execution_v2", "user_request": "..."},
+  "prompt": {"system_prompt": "...tool_execution_system.txt 的完整内容...", "user_request": "..."},
   "resources": {
     "dataset": {"path": "/absolute/path/to/data.csv", "format": "csv"},
     "images": []

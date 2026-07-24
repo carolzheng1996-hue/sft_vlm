@@ -17,7 +17,7 @@ from api_sft.catalogs import normalize_models, normalize_tools
 from api_sft.common import load_env_file, load_yaml, sha256_file, stable_hash, write_json, write_jsonl
 from api_sft.exporters import export_datasets
 from api_sft.answers import generate_answers
-from api_sft.questions import QUESTION_AUDIT_FORMAT_VERSION, QUESTION_CONTRACT_VERSION, QUESTION_RUNTIME_FORMAT_VERSION, QUESTION_RUNTIME_KEYS, UNIVERSAL_INGEST_TOOLS, _candidate_tool_pool, _model_catalog_scope, _requests_model_decision, _spec_compatible, _task_specs, assign_task_specs, build_question_specs, generate_questions, plan_modality_sampling, question_writer_payload, validate_question, write_coverage_report
+from api_sft.questions import QUESTION_AUDIT_FORMAT_VERSION, QUESTION_CONTRACT_VERSION, QUESTION_RUNTIME_FORMAT_VERSION, QUESTION_RUNTIME_KEYS, TOOL_EXECUTION_SYSTEM_PROMPT, UNIVERSAL_INGEST_TOOLS, _candidate_tool_pool, _model_catalog_scope, _requests_model_decision, _spec_compatible, _task_specs, assign_task_specs, build_question_specs, generate_questions, plan_modality_sampling, question_writer_payload, validate_question, write_coverage_report
 from api_sft.scenarios import ARCHETYPES, TASK_RATIOS, WIDE_PANEL_LAYOUT, create_scenario, generate_scenarios, persist_scenario, rebuild_scenario_manifest, render_images, render_images_from_observed, to_wide_panel
 from api_sft.signal_generator import DEFAULT_COMPLEXITY_MIX, complexity_schedule, render_signal, sample_signal_spec
 from api_sft.verify import deterministic_review
@@ -278,7 +278,7 @@ class QuestionTests(unittest.TestCase):
             "series_count":"single","history_length":"long","difficulty":"medium","input_mode":mode,"data_path":"/tmp/data.csv","dataset_attachment":{"path":"/tmp/data.csv","format":"csv","source_type":"local_path"},"images":["/tmp/x.png"] if mode=="image_text" else [],"image_inventory":["overview.png"] if mode=="image_text" else [],"image_attachments":[{"path":"/tmp/x.png","filename":"x.png","media_type":"image/png","source_type":"local_path"}] if mode=="image_text" else [],
             "evidence_packet":{"schema":{"columns":["time","s01"]},"data_scale":{"row_count":803,"series_count":1,"history_length_per_series":803},"time_index":{"frequency":"synthetic_step","observed_range":{"start":"0","end":"802"}},"statistics":{"s01":{"mean":1.2}},"business_constraints":{"compute_budget":"low","interpretability":"required","error_cost":"under_forecast_higher"},"known_future_covariates":[]},
             "visible_context":{},"recommended_mode":"text_only","image_value":"low","visual_reason":"x","recommended_plots":[],"text_can_answer":[],"image_should_answer":[],"requires_statistical_confirmation":[],
-            "model_catalog_scope":"none","system_prompt_id":"tsa_tool_execution_v2","system_prompt":"TOOL SYSTEM","message_format":"neutral_local_images_v1","trajectory_requirement":"tool_execution","candidate_tools":[],"primary_tools":["data_profile"],"required_answer_elements":["schema判断"],
+            "model_catalog_scope":"none","system_prompt":"TOOL SYSTEM","message_format":"neutral_local_images_v1","trajectory_requirement":"tool_execution","candidate_tools":[],"primary_tools":["data_profile"],"required_answer_elements":["schema判断"],
             "internal_rubric":{"task_instruction":"internal-only","required_elements":["schema判断"],"preferred_tools":["data_profile"],"image_policy":"low","expected_decision_points":2,"allowed_user_tool_mentions":[],"evidence_boundaries":[]},"scenario_hash":"hash",
         }
 
@@ -341,7 +341,8 @@ class QuestionTests(unittest.TestCase):
         self.assertEqual(set(rows[0]),QUESTION_RUNTIME_KEYS)
         self.assertEqual(set(rows[0]["spec_ref"]),{"version","hash"})
         self.assertEqual(set(rows[0]["task"]),{"category","subtask_id","goal","input_mode","model_catalog_scope"})
-        self.assertEqual(set(rows[0]["prompt"]),{"system_prompt_id","user_request"})
+        self.assertEqual(set(rows[0]["prompt"]),{"system_prompt","user_request"})
+        self.assertEqual(rows[0]["prompt"]["system_prompt"], TOOL_EXECUTION_SYSTEM_PROMPT)
         self.assertEqual(set(rows[0]["resources"]),{"dataset","images"})
         self.assertEqual(set(rows[0]["resources"]["dataset"]),{"path","format"})
         self.assertLess(sum(len(json.dumps(row,ensure_ascii=False)) for row in rows)/len(rows),5000)

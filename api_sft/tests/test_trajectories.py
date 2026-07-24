@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from api_sft.common import write_jsonl
 from api_sft.cli import _assert_resumable_question_formats, _assert_resumable_trajectory_formats, archive_question_run, archive_trajectory_run
+from api_sft.questions import TOOL_EXECUTION_SYSTEM_PROMPT
 from api_sft.trajectories import COMPETITION_AUDIT_FORMAT_VERSION, TRAJECTORY_FORMAT_VERSION, TrajectoryGenerationError, _generate_candidate, _search_model_catalog, _select_with_judge, generate_one_trajectory, generate_trajectories
 from api_sft.trajectory_exporters import _trl_record, export_trajectory_datasets
 from api_sft.trajectory_verify import deterministic_trajectory_review, verify_trajectories
@@ -79,7 +80,7 @@ class FakeRuntime:
 def question_row() -> dict:
     return {
         "id": "q1",
-        "format_version": "question_runtime_v1",
+        "format_version": "question_runtime_v2",
         "spec_ref": {"version": "4.0", "hash": "question-hash"},
         "task": {
             "category": "data_profile",
@@ -89,7 +90,7 @@ def question_row() -> dict:
             "model_catalog_scope": "none",
         },
         "prompt": {
-            "system_prompt_id": "tsa_tool_execution_v2",
+            "system_prompt": TOOL_EXECUTION_SYSTEM_PROMPT,
             "user_request": "请分析数据结构并决定后续预测策略。",
         },
         "resources": {

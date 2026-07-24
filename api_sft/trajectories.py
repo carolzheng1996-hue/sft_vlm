@@ -10,7 +10,7 @@ from jsonschema import Draft202012Validator
 
 from .api_client import OpenAICompatibleClient, image_data_url, parse_json_object, user_message
 from .common import append_jsonl, done_ids, iter_jsonl, stable_hash
-from .questions import QUESTION_RUNTIME_FORMAT_VERSION, TOOL_EXECUTION_SYSTEM_PROMPT, TOOL_EXECUTION_SYSTEM_PROMPT_ID
+from .questions import QUESTION_RUNTIME_FORMAT_VERSION
 from .tool_runtime import ClaudeTsaToolRuntime
 
 
@@ -250,10 +250,9 @@ def _observed_tool_content(
 
 
 def _execution_system_prompt(row: dict[str, Any], setup: dict[str, Any], min_calls: int, max_calls: int) -> str:
-    prompt_id = str(_runtime_prompt(row).get("system_prompt_id") or "")
-    if prompt_id != TOOL_EXECUTION_SYSTEM_PROMPT_ID:
-        raise ValueError(f"Unsupported system_prompt_id: {prompt_id}")
-    base = TOOL_EXECUTION_SYSTEM_PROMPT
+    base = str(_runtime_prompt(row).get("system_prompt") or "").strip()
+    if not base:
+        raise ValueError("Runtime question is missing prompt.system_prompt")
     scope = _runtime_scope(row)
     catalog_rule = (
         "- 本题不提供模型目录检索；不要编造或无故讨论具体模型名称。\n"

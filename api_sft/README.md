@@ -126,7 +126,7 @@ python -m api_sft --config api_sft/config.yaml run-all --resume
 - 使用分层模态采样：低图像价值以 text-only 为主，中价值提高严格配对比例，高价值以 image-text 为主；仅部分场景生成严格配对问题。
 - 配对记录通过 `pair_id` 和 `split_group` 绑定，划分训练/验证集时必须整组分配。
 - 通用工具执行、证据边界和粗粒度模型目录规则放在 `prompts/tool_execution_system.txt`，不再重复写入用户问题。
-- 最终 `questions.final.jsonl` 使用 `question_runtime_v1` 紧凑协议，只保留任务、自然请求、资源和工具白名单；System Prompt 根据 ID 在轨迹运行时加载。
+- 最终 `questions.final.jsonl` 使用 `question_runtime_v2` 紧凑协议，只保留任务、System Prompt、自然请求、资源和工具白名单；System Prompt 在生成时直接读取 `prompts/tool_execution_system.txt` 并写入 `prompt.system_prompt`。
 - 轨迹运行时才把暂存后的 `uploads/dataset.csv` URI 加入 user content；final 不保存 `context_block`、重复 `messages` 或完整工具 schema。
 - Question Writer 只看到用户目标、外部业务约束和资源语义，不看到行数、历史长短、统计摘要或数据模式；Question Contract v3 同时阻止派生结论和越界模型选型。
 - 用户问题包含至少两个决策点和一个现实约束，但不包含固定工具链、Top-3 或答案章节。
