@@ -7,6 +7,7 @@ from typing import Any
 
 from .api_client import OpenAICompatibleClient, parse_json_object, user_message
 from .common import append_jsonl, done_ids, iter_jsonl
+from .questions import QUESTION_RUNTIME_FORMAT_VERSION
 
 
 ANSWER_SCHEMA={
@@ -41,6 +42,10 @@ def _call_answer(row: dict[str,Any], cfg: dict[str,Any], timeout: int, retries: 
 
 def generate_answers(input_path: Path, output_path: Path, vlm_configs: list[dict[str,Any]], concurrency: int=4, timeout: int=120, retries: int=3, resume: bool=False, limit: int|None=None) -> None:
     rows=list(iter_jsonl(input_path)); rows=rows[:limit] if limit else rows
+    runtime=[row["id"] for row in rows if row.get("format_version")==QUESTION_RUNTIME_FORMAT_VERSION]
+    if runtime:
+        preview=", ".join(runtime[:3])
+        raise RuntimeError(f"Question records require real tool-execution trajectories ({preview}). The legacy answer generator cannot consume compact runtime questions.")
     legacy=[row["id"] for row in rows if row.get("question_spec_version") not in {"3.0","3.1","4.0"}]
     if legacy:
         preview=", ".join(legacy[:3])

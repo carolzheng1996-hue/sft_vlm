@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator
 
 from .api_client import OpenAICompatibleClient, image_data_url, parse_json_object, user_message
 from .common import append_jsonl, done_ids, iter_jsonl, stable_hash
+from .questions import QUESTION_RUNTIME_FORMAT_VERSION, TOOL_EXECUTION_SYSTEM_PROMPT, TOOL_EXECUTION_SYSTEM_PROMPT_ID
 from .tool_runtime import ClaudeTsaToolRuntime
 
 
@@ -111,9 +112,40 @@ def _search_model_catalog(models: list[dict[str, Any]], scope: str, arguments: d
     }
 
 
-def _replace_dataset_path(text: str, original: str, uri: str) -> str:
-    replaced = text.replace(original, uri) if original else text
-    return replaced.replace(f"dataset_path: {original}", f"dataset_path: {uri}") if original else replaced
+def _runtime_task(row: dict[str, Any]) -> dict[str, Any]:
+    return row.get("task") if isinstance(row.get("task"), dict) else {}
+
+
+def _runtime_prompt(row: dict[str, Any]) -> dict[str, Any]:
+    return row.get("prompt") if isinstance(row.get("prompt"), dict) else {}
+
+
+def _runtime_resources(row: dict[str, Any]) -> dict[str, Any]:
+    return row.get("resources") if isinstance(row.get("resources"), dict) else {}
+
+
+def _runtime_dataset_path(row: dict[str, Any]) -> str:
+    dataset = _runtime_resources(row).get("dataset") or {}
+    return str(dataset.get("path") or "")
+
+
+def _runtime_images(row: dict[str, Any]) -> list[str]:
+    return [
+        str(item["path"])
+        for item in _runtime_resources(row).get("images", [])
+        if isinstance(item, dict) and item.get("path")
+    ]
+
+
+def _runtime_scope(row: dict[str, Any]) -> str:
+    return str(_runtime_task(row).get("model_catalog_scope", "none"))
+
+
+def _runtime_user_content(row: dict[str, Any], dataset_uri: str) -> str:
+    request = str(_runtime_prompt(row).get("user_request") or "").strip()
+    if not request:
+        raise ValueError("Runtime question is missing prompt.user_request")
+    return request + "\n\n可访问的数据资源：\n" + f"- dataset_path: {dataset_uri}"
 
 
 def _api_content(text: str, images: list[str]) -> str | list[dict[str, Any]]:
@@ -218,8 +250,11 @@ def _observed_tool_content(
 
 
 def _execution_system_prompt(row: dict[str, Any], setup: dict[str, Any], min_calls: int, max_calls: int) -> str:
-    base = str(row.get("system_prompt") or row.get("messages", [{}])[0].get("content", ""))
-    scope = str(row.get("model_catalog_scope", "none"))
+    prompt_id = str(_runtime_prompt(row).get("system_prompt_id") or "")
+    if prompt_id != TOOL_EXECUTION_SYSTEM_PROMPT_ID:
+        raise ValueError(f"Unsupported system_prompt_id: {prompt_id}")
+    base = TOOL_EXECUTION_SYSTEM_PROMPT
+    scope = _runtime_scope(row)
     catalog_rule = (
         "- 本题不提供模型目录检索；不要编造或无故讨论具体模型名称。\n"
         if scope == "none"
@@ -309,19 +344,24 @@ def generate_one_trajectory(
     candidate_index: int | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
-    candidate_names = {str(tool["name"]) for tool in row.get("candidate_tools", []) if tool.get("name")}
-    setup = runtime.start(row["id"], Path(row["data_path"]), candidate_names)
+    if row.get("format_version") != QUESTION_RUNTIME_FORMAT_VERSION:
+        raise ValueError(f"Unsupported question runtime format: {row.get('format_version')}")
+    candidate_names = {str(name) for name in row.get("allowed_tools", []) if str(name)}
+    data_path = _runtime_dataset_path(row)
+    if not data_path:
+        raise ValueError("Runtime question is missing resources.dataset.path")
+    setup = runtime.start(row["id"], Path(data_path), candidate_names)
     tools = runtime.tools_for_model()
-    scope = str(row.get("model_catalog_scope", "none"))
+    scope = _runtime_scope(row)
     if scope not in {"none", "forecast", "anomaly_detection"}:
         raise ValueError(f"Unsupported model_catalog_scope: {scope}")
     if scope != "none":
         tools.append(_model_catalog_search_definition(setup["session_id"], scope))
     tool_definitions = {item["function"]["name"]: item for item in tools}
-    question = _replace_dataset_path(str(row["question"]), str(row.get("data_path", "")), setup["dataset_uri"])
+    question = _runtime_user_content(row, setup["dataset_uri"])
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _execution_system_prompt(row, setup, min_tool_calls, max_tool_calls)},
-        {"role": "user", "content": question, "images": list(row.get("images", []))},
+        {"role": "user", "content": question, "images": _runtime_images(row)},
     ]
     tool_events: list[dict[str, Any]] = []
     seen_call_ids: set[str] = set()
@@ -582,7 +622,7 @@ def _selector_material(candidate: dict[str, Any], review: dict[str, Any]) -> dic
 def _selector_images(row: dict[str, Any], candidates: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
     paths: list[str] = []
     manifest: list[dict[str, Any]] = []
-    for path in row.get("images", []):
+    for path in _runtime_images(row):
         if Path(path).is_file() and path not in paths:
             manifest.append({"image_index": len(paths), "source": "initial_question", "filename": Path(path).name})
             paths.append(path)
@@ -618,9 +658,8 @@ def _select_with_judge(
     images, image_manifest = _selector_images(row, candidates)
     payload = {
         "task": "Choose the better real tool-execution trajectory. Do not add facts or use hidden rubric fields.",
-        "question": row.get("question"),
-        "input_mode": row.get("input_mode"),
-        "business_constraints": row.get("visible_context", {}).get("business_constraints", {}),
+        "question": _runtime_prompt(row).get("user_request"),
+        "input_mode": _runtime_task(row).get("input_mode"),
         "image_manifest": image_manifest,
         "candidates": [_selector_material(candidate, review) for candidate, review in zip(candidates, reviews)],
         "scoring": {
@@ -696,9 +735,9 @@ def generate_trajectories(
     completed = done_ids(output_path) if resume else set()
     rows = list(iter_jsonl(input_path))
     rows = rows[:limit] if limit else rows
-    stale = [row.get("id") for row in rows if row.get("question_spec_version") != "4.0"]
+    stale = [row.get("id") for row in rows if row.get("format_version") != QUESTION_RUNTIME_FORMAT_VERSION]
     if stale:
-        raise RuntimeError(f"Trajectory V2 requires QuestionSpec 4.0; regenerate stale questions first: {', '.join(map(str, stale[:3]))}")
+        raise RuntimeError(f"Trajectories require {QUESTION_RUNTIME_FORMAT_VERSION}; regenerate stale questions first: {', '.join(map(str, stale[:3]))}")
     for row in rows:
         if row["id"] in completed:
             continue

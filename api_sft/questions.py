@@ -14,12 +14,15 @@ from .signal_generator import GENERATOR_VERSION
 
 
 QUESTION_SPEC_VERSION = "4.0"
-QUESTION_WRITER_PROMPT_ID = "question_writer_v2"
-QUESTION_CONTRACT_VERSION = "2"
+QUESTION_WRITER_PROMPT_ID = "question_writer_v3"
+QUESTION_CONTRACT_VERSION = "3"
+QUESTION_RUNTIME_FORMAT_VERSION = "question_runtime_v1"
+QUESTION_AUDIT_FORMAT_VERSION = "question_generation_audit_v1"
 TOOL_EXECUTION_SYSTEM_PROMPT_ID = "tsa_tool_execution_v2"
 QUESTION_MESSAGE_FORMAT = "neutral_local_images_v1"
 COVERAGE_REPORT_NAME = "coverage_report.json"
 TOOL_EXECUTION_SYSTEM_PROMPT = (Path(__file__).with_name("prompts") / "tool_execution_system.txt").read_text(encoding="utf-8").strip()
+QUESTION_RUNTIME_KEYS = {"id", "format_version", "spec_ref", "task", "prompt", "resources", "allowed_tools"}
 
 TOOL_FOCUS = {
     "data_profile": ["data_profile", "data_quality_check", "series_overview", "summary_stats", "shape_distri", "Trend_linear", "adf_test", "seasonality_detector", "FFT", "STL", "cpt_detector", "plot"],
@@ -81,6 +84,11 @@ ANSWER_BLUEPRINT_PATTERNS = [
     r"请以.{0,12}(?:方式|结构)组织答案",
 ]
 IMAGE_CLAIM_PATTERNS = [r"图中(?:显示|可见)", r"图片中(?:显示|可见)", r"附图(?:显示|表明)", r"请看图", r"结合所给图像"]
+
+DATA_ENTITY_PATTERN = re.compile(r"数据|序列|指标|残差|模型|训练|验证|预测|预测区间|时间戳|时间索引|历史数据|历史观测|样本", re.I)
+DATA_FINDING_PATTERN = re.compile(r"缺失|异常|趋势|周期|季节|漂移|变点|相关|自相关|异方差|非平稳|长尾|零膨胀|偏差|偏离|遗漏|过拟合|欠拟合|震荡|白噪声|覆盖|退化|相似|差异|不同|不规则", re.I)
+DATA_ASSERTION_PATTERN = re.compile(r"存在|出现|呈现|表现|包含|显示|发现|具有|都有|均有|明显|显著|有限|不足|较短|较长|严重|偏离|遗漏|过拟合|欠拟合|震荡|退化|相似|不同", re.I)
+UNCERTAINTY_PATTERN = re.compile(r"是否|有无|能否|判断|检查|识别|评估|确认|核验|验证|分析|不确定|如果|若", re.I)
 
 
 def _choose_images(scenario: dict[str, Any], limit: int = 3) -> list[str]:
@@ -471,18 +479,99 @@ def build_question_specs(
     return rows
 
 
+def _resource_semantics(spec: dict[str, Any]) -> list[str]:
+    """Return artifact roles only; never expose observed values or exact column names."""
+
+    columns = [str(value).casefold() for value in spec.get("evidence_packet", {}).get("schema", {}).get("columns", [])]
+    roles = {"time_series_values"}
+    if any(value in {"time", "step", "timestamp", "date"} for value in columns):
+        roles.add("time_index")
+    if any("series_id" in value for value in columns):
+        roles.add("series_identifier")
+    if any(value == "actual" or value.endswith("__actual") for value in columns):
+        roles.add("actual_values")
+    if any("prediction" in value and "model_b" not in value for value in columns):
+        roles.add("model_a_predictions")
+    if any("model_b_prediction" in value for value in columns):
+        roles.add("model_b_predictions")
+    if any("residual" in value for value in columns):
+        roles.add("residuals")
+    if any("horizon" in value for value in columns):
+        roles.add("forecast_horizon")
+    if any("lower" in value for value in columns) and any("upper" in value for value in columns):
+        roles.add("prediction_intervals")
+    if any(value.startswith("train_") or "train_loss" in value for value in columns):
+        roles.add("training_metrics")
+    if any(value.startswith("val_") or "validation" in value for value in columns):
+        roles.add("validation_metrics")
+    return sorted(roles)
+
+
+def safe_external_context(spec: dict[str, Any]) -> dict[str, Any]:
+    """Build writer-visible facts that cannot be discovered by profiling the dataset."""
+
+    evidence = spec.get("evidence_packet", {})
+    task_goal = str(spec.get("task_goal", ""))
+    subtask = str(spec.get("subtask_id", ""))
+    constraints = dict(evidence.get("business_constraints") or {})
+    error_cost = str(constraints.get("error_cost", ""))
+    compatible_error_costs: set[str] | None = None
+    if task_goal == "forecast":
+        compatible_error_costs = {"under_forecast_higher", "over_forecast_higher", "symmetric"}
+    elif task_goal in {"point_anomaly_detection", "sequence_anomaly_detection"}:
+        compatible_error_costs = {"false_alarm_higher", "missed_detection_higher", "symmetric"}
+    if compatible_error_costs is not None and error_cost and error_cost not in compatible_error_costs:
+        constraints.pop("error_cost", None)
+    context: dict[str, Any] = {
+        "decision_constraints": constraints,
+        "resource_semantics": _resource_semantics(spec),
+    }
+    task_specific: dict[str, Any] = {}
+    if task_goal == "forecast" or spec.get("task") == "model_selection":
+        for key in ["forecast_requirement", "known_future_covariates", "unknown_future_covariates"]:
+            if key in evidence:
+                task_specific[key] = evidence[key]
+    if subtask == "selection_hierarchy_reconciliation" and "hierarchy" in evidence:
+        task_specific["hierarchy"] = evidence["hierarchy"]
+    if task_goal == "point_anomaly_detection":
+        task_specific["detection_granularity"] = "individual time points"
+    elif task_goal == "sequence_anomaly_detection":
+        task_specific["detection_granularity"] = "whole sequences within a group"
+    if spec.get("task") == "model_result_analysis":
+        task_specific["supplied_result_purpose"] = "diagnose or compare the supplied anonymous model outputs"
+        if task_goal == "monitoring_retraining":
+            task_specific["decision_objective"] = "decide whether monitoring evidence warrants retraining, rollback, or human review"
+    if spec.get("task") == "similarity_analysis":
+        title = str(spec.get("subtask_title") or "temporal behavior for a downstream decision")
+        task_specific["comparison_purpose"] = f"investigate whether the data support: {title}; the outcome is unknown"
+    for key in [
+        "label_availability",
+        "human_review_requirement",
+        "deployment_status",
+        "raw_scale_business_meaning",
+        "grouping_use",
+        "downstream_use",
+        "allowed_transformations",
+        "stopping_condition",
+    ]:
+        if key in evidence:
+            task_specific[key] = evidence[key]
+    if task_specific:
+        context["task_specific_context"] = task_specific
+    return context
+
+
 def question_writer_payload(specs: list[dict[str, Any]], feedback: list[str] | None = None) -> dict[str, Any]:
     first = specs[0]
-    image_inventory = sorted({name for spec in specs for name in spec.get("image_inventory", [])})
     model_scope = str(first.get("model_catalog_scope", "none"))
     existing_result_comparison = model_scope == "none" and first.get("task") == "model_result_analysis"
     payload: dict[str, Any] = {
-        "task": {"category": first["task_label"], "fine_grained_task": first["subtask_title"], "business_goal": first["task_goal"]},
-        "scenario": {"series_count": first["series_count"], "history_length": first["history_length"]},
-        "difficulty": first["difficulty"],
-        "input_modes": sorted({spec["input_mode"] for spec in specs}),
-        "visible_evidence": first["evidence_packet"],
-        "available_image_types": image_inventory,
+        "task": {
+            "category": first["task_label"],
+            "investigation_topic": f"待判断：{first['subtask_title']}；结果未知",
+            "business_goal": first["task_goal"],
+        },
+        "external_context": safe_external_context(first),
         "decision_boundaries": {
             "model_selection": (
                 "existing labeled model/result comparison is allowed, but proposing or naming new model families is forbidden"
@@ -493,10 +582,11 @@ def question_writer_payload(specs: list[dict[str, Any]], feedback: list[str] | N
             ),
         },
         "required_output": {
-            "user_request": "自然的中文业务问题；不要重复结构化材料中的精确数值",
-            "decision_points": "问题实际包含的两个或三个决策点，仅用于审计，不会放入用户消息",
-            "constraint_key": "实际使用的 business_constraints 字段名",
-            "facts_used": "引用的 visible_evidence 字段路径列表",
+            "user_request": "自然的中文业务问题；数据属性必须写成待检查事项，不得陈述观测结论",
+            "required_decision_count": int(first.get("internal_rubric", {}).get("expected_decision_points", 2)),
+            "decision_points": "问题实际包含的决策点，仅用于审计，不会放入用户消息",
+            "constraint_key": "实际使用的 external_context.decision_constraints 字段名",
+            "business_facts_used": "引用的 external_context 字段路径列表；不得引用数据统计或观测结论",
         },
     }
     if feedback:
@@ -504,52 +594,71 @@ def question_writer_payload(specs: list[dict[str, Any]], feedback: list[str] | N
     return payload
 
 
-def _context_block(packet: dict[str, Any], data_path: str) -> str:
-    return (
-        "可访问的数据资源：\n"
-        f"- dataset_path: {data_path}\n\n"
-        "已提供的结构化材料（仅代表当前可见信息）：\n"
-        + json.dumps(packet, ensure_ascii=False, indent=2)
-    )
-
-
 def materialize_question_record(
+    spec: dict[str, Any],
+    generation: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the compact runtime-only Question record."""
+
+    return {
+        "id": spec["id"],
+        "format_version": QUESTION_RUNTIME_FORMAT_VERSION,
+        "spec_ref": {
+            "version": spec["question_spec_version"],
+            "hash": spec["question_spec_hash"],
+        },
+        "task": {
+            "category": spec["task"],
+            "subtask_id": spec["subtask_id"],
+            "goal": spec["task_goal"],
+            "input_mode": spec["input_mode"],
+            "model_catalog_scope": spec.get("model_catalog_scope", "none"),
+        },
+        "prompt": {
+            "system_prompt_id": spec.get("system_prompt_id", TOOL_EXECUTION_SYSTEM_PROMPT_ID),
+            "user_request": generation["user_request"],
+        },
+        "resources": {
+            "dataset": {"path": spec["data_path"], "format": "csv"},
+            "images": [
+                {"path": path, "media_type": "image/png"}
+                for path in spec.get("images", [])
+            ],
+        },
+        "allowed_tools": list(dict.fromkeys(
+            str(tool["name"])
+            for tool in spec.get("candidate_tools", [])
+            if tool.get("name")
+        )),
+    }
+
+
+def materialize_question_audit(
     spec: dict[str, Any],
     generation: dict[str, Any],
     quality: dict[str, Any],
     attempts: list[dict[str, Any]] | None = None,
     shared_generation_with: str | None = None,
 ) -> dict[str, Any]:
-    """Build a directly consumable system+user Question record without calling an API."""
-    out = dict(spec)
-    context_block = _context_block(spec["evidence_packet"], spec["data_path"])
-    question = generation["user_request"] + "\n\n" + context_block
-    images = list(spec.get("images", []))
-    system_prompt = str(spec.get("system_prompt") or TOOL_EXECUTION_SYSTEM_PROMPT)
-    out.update({
-        "user_request": generation["user_request"],
-        "context_block": context_block,
-        "question": question,
-        "messages": _question_messages(question, images, system_prompt),
-        "message_format": QUESTION_MESSAGE_FORMAT,
-        "dataset_attachment": spec.get("dataset_attachment") or {
-            "path": spec["data_path"], "format": "csv", "source_type": "local_path",
-        },
-        "image_attachments": _image_attachments(images),
-        "question_quality": quality,
+    return {
+        "id": spec["id"],
+        "format_version": QUESTION_AUDIT_FORMAT_VERSION,
         "question_contract_version": QUESTION_CONTRACT_VERSION,
-        "question_source": "llm_direct_from_question_spec",
         "question_writer_prompt_id": QUESTION_WRITER_PROMPT_ID,
+        "spec_ref": {
+            "version": spec["question_spec_version"],
+            "hash": spec["question_spec_hash"],
+        },
+        "question_quality": quality,
         "question_generation": {
             "model": generation.get("model"),
             "attempts": attempts or [],
             "shared_generation_with": shared_generation_with,
             "decision_points": generation.get("decision_points", []),
             "constraint_key": generation.get("constraint_key", ""),
-            "facts_used": generation.get("facts_used", []),
+            "business_facts_used": generation.get("business_facts_used", []),
         },
-    })
-    return out
+    }
 
 
 def _numbers(text: str) -> set[str]:
@@ -557,8 +666,19 @@ def _numbers(text: str) -> set[str]:
 
 
 def _known_constraint_keys(spec: dict[str, Any]) -> set[str]:
-    constraints = spec.get("evidence_packet", {}).get("business_constraints", {})
+    constraints = safe_external_context(spec).get("decision_constraints", {})
     return {str(key) for key in constraints}
+
+
+def _data_finding_assertions(text: str) -> list[str]:
+    hits: list[str] = []
+    for clause in re.split(r"[，。；？！\n]", text):
+        compact = clause.strip()
+        if not compact or UNCERTAINTY_PATTERN.search(compact):
+            continue
+        if DATA_ENTITY_PATTERN.search(compact) and DATA_FINDING_PATTERN.search(compact) and DATA_ASSERTION_PATTERN.search(compact):
+            hits.append(compact)
+    return hits
 
 
 MODEL_DECISION_PATTERNS = [
@@ -587,6 +707,11 @@ def _evidence_paths(value: Any, prefix: str = "") -> set[str]:
             paths.update(_evidence_paths(child, path))
     elif isinstance(value, list):
         paths.add(prefix)
+        for index, child in enumerate(value):
+            if isinstance(child, (str, int, float, bool)):
+                paths.add(f"{prefix}.{child}")
+            elif isinstance(child, dict):
+                paths.update(_evidence_paths(child, f"{prefix}.{index}"))
     return paths
 
 
@@ -600,14 +725,16 @@ def validate_question(
     if not isinstance(decision_points, list):
         decision_points = []
     constraint_key = str(writer_metadata.get("constraint_key", ""))
-    facts_used = writer_metadata.get("facts_used", [])
-    if not isinstance(facts_used, list):
-        facts_used = []
+    business_facts_used = writer_metadata.get("business_facts_used", [])
+    if not isinstance(business_facts_used, list):
+        business_facts_used = []
     minimum_decisions = int(spec.get("internal_rubric", {}).get("expected_decision_points", 2)) if spec else 2
-    allowed_numbers = _numbers(json.dumps(spec.get("evidence_packet", {}), ensure_ascii=False)) if spec else set()
+    external_context = safe_external_context(spec) if spec else {}
+    allowed_numbers = _numbers(json.dumps(external_context, ensure_ascii=False)) if spec else set()
     unexpected_numbers = sorted(_numbers(text) - allowed_numbers) if spec else sorted(_numbers(text))
     blueprint_hits = [pattern for pattern in ANSWER_BLUEPRINT_PATTERNS if re.search(pattern, text, flags=re.I | re.S)]
     image_claim_hits = [pattern for pattern in IMAGE_CLAIM_PATTERNS if re.search(pattern, text, flags=re.I)]
+    finding_assertions = _data_finding_assertions(text)
     allowed_tools = set(spec.get("internal_rubric", {}).get("allowed_user_tool_mentions", [])) if spec else set()
     named_tools: set[str] = set()
     if spec:
@@ -619,9 +746,9 @@ def validate_question(
     named_models: list[str] = []
     no_model_catalog = bool(spec and spec.get("model_catalog_scope") == "none")
     model_decision_requested = _requests_model_decision(text)
-    known_paths = _evidence_paths(spec.get("evidence_packet", {})) if spec else set()
-    known_paths |= {f"visible_evidence.{path}" for path in known_paths}
-    unknown_fact_paths = sorted({str(path) for path in facts_used if str(path) not in known_paths}) if spec else []
+    known_paths = _evidence_paths(external_context) if spec else set()
+    known_paths |= {f"external_context.{path}" for path in known_paths}
+    unknown_fact_paths = sorted({str(path) for path in business_facts_used if str(path) not in known_paths}) if spec else []
     checks = {
         "minimum_length": len(text.strip()) >= 60,
         "maximum_length": len(text.strip()) <= 360,
@@ -629,7 +756,8 @@ def validate_question(
         "business_constraint": constraint_key in _known_constraint_keys(spec) if spec else bool(re.search(r"成本|时延|解释|算力|风险|业务", text)),
         "no_answer_blueprint": not blueprint_hits,
         "grounded_numbers": not unexpected_numbers,
-        "grounded_fact_paths": bool(facts_used) and not unknown_fact_paths if spec else True,
+        "grounded_business_facts": bool(business_facts_used) and not unknown_fact_paths if spec else True,
+        "no_derived_findings": not finding_assertions,
         "modality_neutral": not image_claim_hits,
         "allowed_tool_mentions": not unexpected_tools,
         "no_model_name_leak": not named_models,
@@ -645,6 +773,7 @@ def validate_question(
             "blueprint_hits": blueprint_hits,
             "unexpected_numbers": unexpected_numbers,
             "unknown_fact_paths": unknown_fact_paths,
+            "derived_finding_assertions": finding_assertions,
             "image_claim_hits": image_claim_hits,
             "unexpected_tool_mentions": unexpected_tools,
             "model_name_leaks": sorted(set(named_models)),
@@ -662,8 +791,9 @@ def _validation_feedback(quality: dict[str, Any]) -> list[str]:
         "multiple_decisions": "决策点数量不足。",
         "business_constraint": "constraint_key 必须取自已提供的 business_constraints。",
         "no_answer_blueprint": "删除答案章节、工具顺序、Top-3 或回测模板等解题提示。",
-        "grounded_numbers": "删除结构化材料中不存在的精确数字。",
-        "grounded_fact_paths": "facts_used 必须至少包含一个真实存在的 visible_evidence 字段路径。",
+        "grounded_numbers": "删除外部业务条件中不存在的精确数字；不得引用数据统计值。",
+        "grounded_business_facts": "business_facts_used 必须引用真实存在的 external_context 字段路径。",
+        "no_derived_findings": "不要陈述缺失、趋势、周期、异常等数据结论；改成需要检查或判断的问题。",
         "modality_neutral": "不要声称图片显示了什么，也不要直接提示看图。",
         "allowed_tool_mentions": "除允许的工具边界题外，不要点名具体工具。",
         "no_model_name_leak": "不要提前给出任何具体模型名称。",
@@ -689,33 +819,43 @@ def generate_questions(
     resume: bool = False,
     limit: int | None = None,
     max_attempts: int = 2,
+    audit_path: Path | None = None,
 ) -> list[dict[str, Any]]:
+    audit_path = audit_path or output_path.with_name("questions.audit.jsonl")
     if not resume:
-        if output_path.exists():
-            output_path.unlink()
-        if rejected_path.exists():
-            rejected_path.unlink()
+        for path in [output_path, audit_path, rejected_path]:
+            if path.exists():
+                path.unlink()
     specs = list(iter_jsonl(specs_path))
     spec_by_id = {row["id"]: row for row in specs}
-    spec_hashes = {row["id"]:row.get("question_spec_hash") for row in specs}
     all_existing = {row["id"]: row for row in iter_jsonl(output_path)} if output_path.exists() else {}
+    all_audits = {row["id"]: row for row in iter_jsonl(audit_path)} if audit_path.exists() else {}
     existing: dict[str, dict[str, Any]] = {}
+    accepted_audits: dict[str, dict[str, Any]] = {}
     invalid_existing_ids: set[str] = set()
     for row_id, row in all_existing.items():
         spec = spec_by_id.get(row_id)
-        metadata = row.get("question_generation", {})
-        quality = validate_question(str(row.get("user_request", "")), spec, metadata) if spec else {"passed": False}
+        audit = all_audits.get(row_id, {})
+        metadata = audit.get("question_generation", {})
+        user_request = str(row.get("prompt", {}).get("user_request", ""))
+        quality = validate_question(user_request, spec, metadata) if spec else {"passed": False}
         reusable = bool(
             spec
-            and row.get("question_spec_hash")
-            and row.get("question_spec_hash") == spec_hashes.get(row_id)
+            and set(row) == QUESTION_RUNTIME_KEYS
+            and row.get("format_version") == QUESTION_RUNTIME_FORMAT_VERSION
+            and row.get("spec_ref", {}).get("version") == spec.get("question_spec_version")
+            and row.get("spec_ref", {}).get("hash") == spec.get("question_spec_hash")
+            and audit.get("format_version") == QUESTION_AUDIT_FORMAT_VERSION
+            and audit.get("question_contract_version") == QUESTION_CONTRACT_VERSION
+            and audit.get("question_writer_prompt_id") == QUESTION_WRITER_PROMPT_ID
+            and audit.get("spec_ref", {}).get("hash") == spec.get("question_spec_hash")
             and quality["passed"]
         )
         if reusable:
-            upgraded = dict(row)
-            upgraded["question_quality"] = quality
-            upgraded["question_contract_version"] = QUESTION_CONTRACT_VERSION
-            existing[row_id] = upgraded
+            existing[row_id] = row
+            refreshed_audit = dict(audit)
+            refreshed_audit["question_quality"] = quality
+            accepted_audits[row_id] = refreshed_audit
         else:
             invalid_existing_ids.add(row_id)
     groups = _groups(specs)
@@ -735,18 +875,18 @@ def generate_questions(
         if not missing:
             continue
         reusable = next((existing[spec["id"]] for spec in group if spec["id"] in existing), None)
-        if reusable is None:
-            reusable = None
         generation: dict[str, Any] | None = None
         quality: dict[str, Any] | None = None
         attempts: list[dict[str, Any]] = []
         if reusable:
+            reusable_audit = accepted_audits[reusable["id"]]
+            reusable_metadata = reusable_audit.get("question_generation", {})
             generation = {
-                "user_request": reusable["user_request"],
-                "decision_points": reusable.get("question_generation", {}).get("decision_points", []),
-                "constraint_key": reusable.get("question_generation", {}).get("constraint_key", ""),
-                "facts_used": reusable.get("question_generation", {}).get("facts_used", []),
-                "model": reusable.get("question_generation", {}).get("model"),
+                "user_request": reusable.get("prompt", {}).get("user_request", ""),
+                "decision_points": reusable_metadata.get("decision_points", []),
+                "constraint_key": reusable_metadata.get("constraint_key", ""),
+                "business_facts_used": reusable_metadata.get("business_facts_used", []),
+                "model": reusable_metadata.get("model"),
             }
             quality = validate_question(generation["user_request"], group[0], generation)
         else:
@@ -763,7 +903,7 @@ def generate_questions(
                         "user_request": str(obj.get("user_request", "")).strip(),
                         "decision_points": obj.get("decision_points", []),
                         "constraint_key": str(obj.get("constraint_key", "")).strip(),
-                        "facts_used": obj.get("facts_used", []),
+                        "business_facts_used": obj.get("business_facts_used", []),
                         "model": model_config.get("model"),
                     }
                     quality = validate_question(candidate["user_request"], group[0], candidate)
@@ -780,17 +920,20 @@ def generate_questions(
                 append_jsonl(rejected_path, {"id": spec["id"], "stage": "question_generation", "reason": "writer_failed_after_retries", "attempts": attempts, "question_spec": spec})
             continue
         for index, spec in enumerate(missing):
-            out = materialize_question_record(
-                spec,
-                generation,
-                quality,
+            out = materialize_question_record(spec, generation)
+            audit = materialize_question_audit(
+                spec, generation, quality,
                 attempts if index == 0 else [],
-                None if index == 0 else missing[0]["id"],
+                reusable["id"] if reusable else (None if index == 0 else missing[0]["id"]),
             )
             append_jsonl(output_path, out)
+            append_jsonl(audit_path, audit)
             existing[out["id"]] = out
+            accepted_audits[out["id"]] = audit
     rows = [existing[key] for key in sorted(existing)]
-    write_jsonl(output_path,rows)
+    audits = [accepted_audits[key] for key in sorted(existing) if key in accepted_audits]
+    write_jsonl(output_path, rows)
+    write_jsonl(audit_path, audits)
     if rejected_path.exists():
         unresolved = [row for row in iter_jsonl(rejected_path) if row.get("id") not in existing]
         if unresolved:
@@ -799,7 +942,8 @@ def generate_questions(
             rejected_path.unlink()
     task_specs = _task_specs(Path(__file__).with_name("task_pool.yaml"))
     all_tools = {name for spec in task_specs for name in spec["preferred_tools"]}
-    write_coverage_report(rows, output_path.with_name(COVERAGE_REPORT_NAME), task_specs, all_tools, False)
+    coverage_rows = _coverage_rows(spec_by_id, rows, accepted_audits)
+    write_coverage_report(coverage_rows, output_path.with_name(COVERAGE_REPORT_NAME), task_specs, all_tools, False)
     return rows
 
 
@@ -812,27 +956,32 @@ def rewrite_questions(
     resume: bool = False,
     limit: int | None = None,
     max_attempts: int = 2,
+    audit_path: Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Deprecated compatibility alias for the v2 direct question writer."""
-    return generate_questions(input_path, output_path, rejected_path, model_config, writer_prompt_path, resume, limit, max_attempts)
+    """Deprecated compatibility alias for the direct question writer."""
+    return generate_questions(input_path, output_path, rejected_path, model_config, writer_prompt_path, resume, limit, max_attempts, audit_path)
 
 
-def refresh_question_records(specs_path: Path, output_path: Path) -> list[dict[str, Any]]:
-    """Refresh the deterministic message envelope of accepted questions without an LLM call."""
+def refresh_question_records(specs_path: Path, output_path: Path, audit_path: Path | None = None) -> list[dict[str, Any]]:
+    """Refresh valid v1 runtime records and audits without an LLM call."""
+    audit_path = audit_path or output_path.with_name("questions.audit.jsonl")
     specs = {row["id"]: row for row in iter_jsonl(specs_path)}
+    audits = {row["id"]: row for row in iter_jsonl(audit_path)} if audit_path.exists() else {}
     refreshed: list[dict[str, Any]] = []
+    refreshed_audits: list[dict[str, Any]] = []
     for old in iter_jsonl(output_path):
         spec = specs.get(old.get("id"))
-        if not spec:
+        audit = audits.get(old.get("id"))
+        if not spec or not audit:
             continue
-        if old.get("scenario_hash") != spec.get("scenario_hash") or old.get("subtask_id") != spec.get("subtask_id"):
+        if old.get("format_version") != QUESTION_RUNTIME_FORMAT_VERSION or old.get("spec_ref", {}).get("hash") != spec.get("question_spec_hash"):
             continue
-        metadata = old.get("question_generation", {})
+        metadata = audit.get("question_generation", {})
         generation = {
-            "user_request": old.get("user_request", ""),
+            "user_request": old.get("prompt", {}).get("user_request", ""),
             "decision_points": metadata.get("decision_points", []),
             "constraint_key": metadata.get("constraint_key", ""),
-            "facts_used": metadata.get("facts_used", []),
+            "business_facts_used": metadata.get("business_facts_used", []),
             "model": metadata.get("model"),
         }
         if not generation["user_request"]:
@@ -840,19 +989,40 @@ def refresh_question_records(specs_path: Path, output_path: Path) -> list[dict[s
         quality = validate_question(generation["user_request"], spec, generation)
         if not quality["passed"]:
             continue
-        refreshed.append(materialize_question_record(
-            spec,
-            generation,
-            quality,
+        refreshed.append(materialize_question_record(spec, generation))
+        refreshed_audits.append(materialize_question_audit(
+            spec, generation, quality,
             metadata.get("attempts", []),
             metadata.get("shared_generation_with"),
         ))
     refreshed.sort(key=lambda row: row["id"])
+    refreshed_audits.sort(key=lambda row: row["id"])
     write_jsonl(output_path, refreshed)
+    write_jsonl(audit_path, refreshed_audits)
     task_specs = _task_specs(Path(__file__).with_name("task_pool.yaml"))
     all_tools = {name for spec in task_specs for name in spec["preferred_tools"]}
-    write_coverage_report(refreshed, output_path.with_name(COVERAGE_REPORT_NAME), task_specs, all_tools, False)
+    audit_by_id = {row["id"]: row for row in refreshed_audits}
+    write_coverage_report(_coverage_rows(specs, refreshed, audit_by_id), output_path.with_name(COVERAGE_REPORT_NAME), task_specs, all_tools, False)
     return refreshed
+
+
+def _coverage_rows(
+    specs: dict[str, dict[str, Any]],
+    runtime_rows: list[dict[str, Any]],
+    audits: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for runtime in runtime_rows:
+        spec = specs.get(runtime["id"])
+        if not spec:
+            continue
+        audit = audits.get(runtime["id"], {})
+        rows.append({
+            **spec,
+            "user_request": runtime.get("prompt", {}).get("user_request", ""),
+            "question_quality": audit.get("question_quality", {}),
+        })
+    return rows
 
 
 def write_coverage_report(

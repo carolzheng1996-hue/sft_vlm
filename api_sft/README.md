@@ -87,10 +87,10 @@ api_key: "..."
 python -m api_sft --config api_sft/config.yaml prepare-catalogs
 python -m api_sft --config api_sft/config.yaml migrate-scenarios --resume
 python -m api_sft --config api_sft/config.yaml generate-question-specs
-python -m api_sft --config api_sft/config.yaml generate-questions
+python -m api_sft --config api_sft/config.yaml generate-questions --fresh
 ```
 
-`generate-question-specs` 不调用 API；`generate-questions` 使用 `models.question`。快速小规模检查可以给两个命令加 `--limit`，并使用 `--resume` 断点续跑。`rewrite-questions` 暂时保留为 `generate-questions` 的弃用别名。
+`generate-question-specs` 不调用 API；`generate-questions` 使用 `models.question`。首次生成或协议升级使用 `--fresh`，已有 final、audit、rejected 和 coverage 会被移动到 `question_run_archives/<timestamp>/`；只有同一 Final/Audit 协议的中断续跑才使用 `--resume`。快速小规模检查可以给两个命令加 `--limit`。`rewrite-questions` 暂时保留为 `generate-questions` 的弃用别名。
 
 没有旧场景时可改用 `generate-scenarios` 直接生成当前场景。迁移命令默认读取 `output/legacy/scenarios_v3/scenarios.jsonl`；旧版 Question 不会跨协议复用，记录内部仍通过 `generator_version`、`question_spec_version` 和 `question_contract_version` 标识协议。
 
@@ -126,9 +126,9 @@ python -m api_sft --config api_sft/config.yaml run-all --resume
 - 使用分层模态采样：低图像价值以 text-only 为主，中价值提高严格配对比例，高价值以 image-text 为主；仅部分场景生成严格配对问题。
 - 配对记录通过 `pair_id` 和 `split_group` 绑定，划分训练/验证集时必须整组分配。
 - 通用工具执行、证据边界和粗粒度模型目录规则放在 `prompts/tool_execution_system.txt`，不再重复写入用户问题。
-- 每条最终 QuestionRecord 都内嵌完整 Tool-execution System Prompt，并通过 `messages` 保存 system 与 user 两条消息。
-- user content 包含指向合成观测 CSV 的 `dataset_path`；图文题使用 `<image>` 占位符，并由顶层 `images` / `image_attachments` 提供本地 PNG。
-- Question Writer 只写自然业务诉求；Question Contract v2 会重新校验 resume 记录，并阻止 `model_catalog_scope=none` 的数据画像题擅自要求新模型选型。已有匿名模型 A/B 的结果比较仍然允许。
+- 最终 `questions.final.jsonl` 使用 `question_runtime_v1` 紧凑协议，只保留任务、自然请求、资源和工具白名单；System Prompt 根据 ID 在轨迹运行时加载。
+- 轨迹运行时才把暂存后的 `uploads/dataset.csv` URI 加入 user content；final 不保存 `context_block`、重复 `messages` 或完整工具 schema。
+- Question Writer 只看到用户目标、外部业务约束和资源语义，不看到行数、历史长短、统计摘要或数据模式；Question Contract v3 同时阻止派生结论和越界模型选型。
 - 用户问题包含至少两个决策点和一个现实约束，但不包含固定工具链、Top-3 或答案章节。
 - Question LLM、两个 Answer 候选模型和 Selector 都看不到隐藏真值。
 - Selector 不执行隐藏真值修订，避免把不可见信息写入训练答案。
@@ -140,6 +140,7 @@ python -m api_sft --config api_sft/config.yaml run-all --resume
 - `scenarios/scenarios.jsonl`
 - `question_specs.jsonl`
 - `questions.final.jsonl`
+- `questions.audit.jsonl`
 - `questions.rejected.jsonl`
 - `coverage_report.json`
 - `trajectories.raw.jsonl`
@@ -151,7 +152,7 @@ python -m api_sft --config api_sft/config.yaml run-all --resume
 
 磁盘上的当前文件统一使用无版本后缀，便于人工检查；`v2`、`v4` 只作为 JSON 记录内部的协议/生成器版本，不再出现在当前输出路径中。`trajectory_run_archives/` 中的历史归档保留生成当时的原始文件名，不参与当前续跑。
 
-`questions.final.jsonl` 保留问题生成模型、尝试次数、耗时、token usage、决策点和事实路径等审计信息。观测 CSV 路径会进入 user content，以支持真实工具调用；API key、`truth_path` 和隐藏真值不会进入用户问题。
+`questions.final.jsonl` 只保存轨迹运行必需字段；问题生成模型、尝试次数、耗时、token usage、决策点、约束引用和质量检查保存在 `questions.audit.jsonl`。完整证据包和内部 rubric 只存在于 `question_specs.jsonl`，不会进入模型消息。
 
 ## 真实 Agent 轨迹
 

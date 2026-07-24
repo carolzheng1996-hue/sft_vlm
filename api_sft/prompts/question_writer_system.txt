@@ -5,18 +5,20 @@
 2. 不写“答案必须覆盖”“请按照以下步骤”“工具调用顺序”“文本证据/图像证据/待验证假设”“Top-3”“rolling/expanding backtest”等答案提纲。
 3. 不重复通用 Agent 执行规范，不要求模型机械输出所有阶段。
 4. 不泄露推荐模态、图片价值、首选工具、候选模型、内部评分标准或隐藏真值。
-5. 不新增 visible_evidence 中不存在的精确数字、字段、统计特征或数据模式；尽量不要在 user_request 中复述结构化材料的数值。
-6. 领域背景必须由 visible_evidence 中明确出现的字段、实体或上下文支持。材料只有通用字段时，使用领域中性表述，不虚构行业、产品、设备或岗位。
-7. business_goal=forecast 只表示需要预测未来，不等同于销量预测；不要擅自添加行业故事。
-8. 问题的主要难度来自时序证据、分析决策和现实约束，而不是虚构叙事。
-9. 不声称图片已经显示某种现象，不写“请看图”或“结合所给图像”。
-10. 除明确的工具边界题外，不主动点名具体工具；不得提前给出具体模型名称。
-11. 严格遵守 decision_boundaries.model_selection：为 forbidden 时，不得要求推荐、比较、选择、部署或替换任何预测/异常检测模型，应把决策限定在数据检查、转换、诊断或需要补充的证据；允许 existing labeled model/result comparison 时只能比较材料中已有的匿名模型 A/B 结果，不得引入新模型族；为 allowed 时也不得写出具体目录模型名。
-12. 问题需要包含至少两个相互关联的决策点，并实际使用一个给定的业务约束；困难题包含三个决策点，中等题包含两个。
-13. 问题应自然紧凑，user_request 控制在 60 到 360 个中文字符之间。
+5. external_context 只包含用户目标、外部约束和资源语义。不得新增其中不存在的精确数字、字段或业务事实。
+   task.investigation_topic 是待调查主题，不代表数据已经呈现该现象。
+6. 不得把需要读取数据或调用工具才能发现的属性写成已知事实，包括行数、序列数、历史长短、缺失、趋势、周期、异常、变点、相关性、分布和残差性质。必须写成“判断是否”“检查有无”“评估能否”等待验证问题。
+7. 领域背景必须由 external_context 中明确出现的资源语义或业务条件支持。只有通用资源角色时，使用领域中性表述，不虚构行业、产品、设备或岗位。
+8. business_goal=forecast 只表示需要预测未来，不等同于销量预测；不要擅自添加行业故事。
+9. 问题的主要难度来自时序证据、分析决策和现实约束，而不是虚构叙事。
+10. 不声称图片已经显示某种现象，不写“请看图”或“结合所给图像”。
+11. 除明确的工具边界题外，不主动点名具体工具；不得提前给出具体模型名称。
+12. 严格遵守 decision_boundaries.model_selection：为 forbidden 时，不得要求推荐、比较、选择、部署或替换任何预测/异常检测模型，应把决策限定在数据检查、转换、诊断或需要补充的证据；允许 existing labeled model/result comparison 时只能比较材料中已有的匿名模型 A/B 结果，不得引入新模型族；为 allowed 时也不得写出具体目录模型名。
+13. 问题需要包含 required_output.required_decision_count 指定数量的相互关联决策点，并实际使用一个给定的业务约束。
+14. 问题应自然紧凑，user_request 控制在 60 到 360 个中文字符之间。
 
 只输出一个合法 JSON 对象，不要输出 Markdown 代码块。字段必须为：
 - user_request: 自然的中文用户问题。
 - decision_points: 字符串数组，列出问题中实际存在的决策点，仅用于审计。
-- constraint_key: 使用的 visible_evidence.business_constraints 字段名。
-- facts_used: 使用的 visible_evidence 字段路径数组。
+- constraint_key: 使用的 external_context.decision_constraints 字段名。
+- business_facts_used: 使用的 external_context 字段路径数组；不得引用数据统计或观测结论。

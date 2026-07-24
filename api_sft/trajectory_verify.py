@@ -103,8 +103,10 @@ def deterministic_trajectory_review(record: dict[str, Any], model_catalog: list[
     tools = record.get("tools") or []
     events = record.get("tool_events") or []
     definitions = {tool.get("function", {}).get("name"): tool for tool in tools if tool.get("function", {}).get("name")}
-    candidate_names = {str(tool.get("name")) for tool in row.get("candidate_tools", []) if tool.get("name")}
-    scope = str(row.get("model_catalog_scope", "none"))
+    candidate_names = {str(name) for name in row.get("allowed_tools", []) if str(name)}
+    runtime_task = row.get("task") if isinstance(row.get("task"), dict) else {}
+    resources = row.get("resources") if isinstance(row.get("resources"), dict) else {}
+    scope = str(runtime_task.get("model_catalog_scope", "none"))
     allowed_names = candidate_names | ({MODEL_CATALOG_SEARCH_TOOL} if scope != "none" else set())
     if set(definitions) - allowed_names:
         flags.append("tool_definition_outside_allowlist")
@@ -195,13 +197,11 @@ def deterministic_trajectory_review(record: dict[str, Any], model_catalog: list[
     failed_count = len(events) - successful
     if failed_count:
         warnings.append(f"recovered_tool_failures:{failed_count}")
-    primary = set(row.get("primary_tools", []))
-    if primary and not (primary & distinct):
-        warnings.append("soft_primary_tool_not_used")
+    primary: set[str] = set()
     final_answer = str(record.get("final_answer", ""))
     if len(final_answer.strip()) < 60:
         warnings.append("final_answer_brief")
-    original_path = str(row.get("data_path", ""))
+    original_path = str((resources.get("dataset") or {}).get("path", ""))
     training_projection = [
         {key: message.get(key) for key in ["role", "content", "tool_calls", "tool_call_id", "name"] if key in message}
         for message in messages
@@ -218,7 +218,7 @@ def deterministic_trajectory_review(record: dict[str, Any], model_catalog: list[
     for forbidden in FORBIDDEN_PROMPT_HINTS:
         if forbidden in system_text:
             flags.append(f"prompt_route_leak:{forbidden}")
-    if row.get("input_mode") == "image_text" and (len(messages) < 2 or not messages[1].get("images")):
+    if runtime_task.get("input_mode") == "image_text" and (len(messages) < 2 or not messages[1].get("images")):
         flags.append("missing_initial_image")
 
     returned_names = _returned_model_names(events)

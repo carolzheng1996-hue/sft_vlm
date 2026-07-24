@@ -249,7 +249,7 @@ scenario_xxxxx/
 其中：
 
 - `data.csv`：模型和工具可访问的观测数据。
-- `visible_context.json`：可公开给 Question Writer 的摘要和业务约束。
+- `visible_context.json`：场景侧观测摘要和业务约束；完整内容只用于内部 QuestionSpec，不直接提供给 Question Writer。
 - `ground_truth.json`：真实趋势、周期、异常位置、缺失机制、漂移原因等隐藏真值。
 - `manifest.json`：场景模板、任务目标、模态、hash、布局和文件完整性信息。
 - `figure_provenance.json`：每张图片的输入列、方法、参数和生成来源。
@@ -260,12 +260,14 @@ scenario_xxxxx/
 
 ### 7.1 可见信息
 
-Question Writer 只能使用从观测数据或业务配置计算出的信息，例如：
+Question Writer 只能使用不会替模型完成数据分析的信息：
 
-- 列名、行数、序列数、时间范围和频率标签。
-- 每个序列的长度、均值、标准差、范围和缺失率。
-- 可见的训练曲线、残差列、预测区间和业务约束。
-- 图片本身及其可见形状。
+- 用户目标，以及标记为“结果未知”的待调查主题。
+- 延迟、算力、解释性、错误代价、验证和人工复核等外部约束。
+- 文件是否提供实际值、预测值、残差、区间、训练/验证指标等资源语义角色。
+- 对应任务下无法从数据本身推断的预测范围、未来协变量可用性、层级、检测粒度、部署状态或使用方式。
+
+行数、序列数、历史长短、精确列名、时间范围、缺失率、统计摘要和图片内容均不提供给 Writer。缺失、趋势、周期、异常、变点、相关性及其他可由工具发现的属性必须留给最终模型判断。
 
 ### 7.2 隐藏信息
 
@@ -326,8 +328,8 @@ Question 不是任意场景和任务的随机拼接。调度器优先使用语�
 
 三种情况含义如下：
 
-- `text_only`：只提供数据路径和结构化文本摘要。
-- `image_text`：提供数据路径、摘要和图片。
+- `text_only`：运行时只提供自然业务请求和暂存后的数据 URI。
+- `image_text`：在相同业务请求和数据 URI 之外附加真实图片附件。
 - `paired`：同一场景和同一细粒度任务生成一条 text-only 和一条 image-text 样本。
 
 配对样本通过 `pair_id`、`pair_role` 和 `split_group` 绑定。训练/验证/测试划分时必须按 `split_group` 整组划分，不能让同一场景的两种模态进入不同 split，否则会产生跨模态泄漏。
@@ -359,20 +361,20 @@ QuestionSpec 的作用是把“任务覆盖和数据证据”固定下来，再�
 
 - 描述自然的业务目标，而不是复述内部任务 ID。
 - 至少包含两个决策点，通常还包含一个现实约束。
-- 引用可见证据，但不把摘要中的所有精确数字机械抄进问题。
+- 只引用外部业务条件与资源语义，不向 Writer 提供数据统计或观测结论。
 - 不预先告诉模型固定工具链、答案章节或标准推理顺序。
 - 不提前写出目录中的具体模型名。
 - 不把隐藏真值当作事实描述。
-- 保留 `dataset_path`，让后续 Agent 可以真实读取 CSV。
+- final 保留数据资源路径，轨迹运行时将其暂存并只向 Agent 展示 session URI。
 
-问题生成记录包含 `user_request`、`context_block`、`messages`、图片附件、事实路径、决策点和生成尝试信息。
+`questions.final.jsonl` 只包含紧凑运行字段；事实路径、决策点、生成尝试和质量检查写入 `questions.audit.jsonl`。
 
 ### 11.2 问题校验
 
 问题会进行确定性检查，典型拒绝项包括：
 
 - 决策点数量不足。
-- 引入证据包之外的数字或事实。
+- 引入外部业务条件之外的数字，或提前陈述缺失、趋势、周期、异常等数据结论。
 - 直接使用隐藏真值提示。
 - 擅自点名未允许的工具。
 - 在不允许模型选型的题目中请求新的具体模型。
@@ -506,6 +508,7 @@ api_sft/output/
 │   └── scenarios.jsonl
 ├── question_specs.jsonl
 ├── questions.final.jsonl
+├── questions.audit.jsonl
 ├── questions.rejected.jsonl
 ├── coverage_report.json
 ├── trajectories.raw.jsonl
@@ -522,7 +525,8 @@ api_sft/output/
 
 - `scenarios.jsonl`：场景 manifest 清单，记录 CSV、图片、真值路径和 hash。
 - `question_specs.jsonl`：确定性问题规范，不是最终训练问题。
-- `questions.final.jsonl`：自然语言问题及其图片/数据附件。
+- `questions.final.jsonl`：自然请求、资源、任务边界和工具白名单组成的紧凑运行记录。
+- `questions.audit.jsonl`：问题生成与质量审计，不进入轨迹模型输入。
 - `coverage_report.json`：任务、模态、场景规模、难度和工具覆盖结果。
 - `trajectories.raw.jsonl`：候选竞争后的原始胜出轨迹记录。
 - `trajectories.competition_audit.jsonl`：候选 A/B 的比较审计。

@@ -53,11 +53,12 @@ def _legacy_review_record(record: dict[str, Any]) -> dict[str, Any]:
         "status": "ok" if record.get("generation_status") == "ok" else "error",
         "format_version": LEGACY_TRAJECTORY_FORMAT_VERSION,
         "question_record": {
-            "candidate_tools": [{"name": name} for name in tool_names],
-            "primary_tools": [],
-            "model_catalog_scope": question.get("model_catalog_scope", "none"),
-            "input_mode": question.get("input_mode", "text_only"),
-            "data_path": "",
+            "allowed_tools": tool_names,
+            "task": {
+                "model_catalog_scope": question.get("model_catalog_scope", "none"),
+                "input_mode": question.get("input_mode", "text_only"),
+            },
+            "resources": {"dataset": {"path": ""}, "images": []},
         },
         "messages": messages,
         "tools": tools,

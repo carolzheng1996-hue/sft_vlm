@@ -17,7 +17,7 @@ from api_sft.catalogs import normalize_models, normalize_tools
 from api_sft.common import load_env_file, load_yaml, sha256_file, stable_hash, write_json, write_jsonl
 from api_sft.exporters import export_datasets
 from api_sft.answers import generate_answers
-from api_sft.questions import QUESTION_CONTRACT_VERSION, UNIVERSAL_INGEST_TOOLS, _candidate_tool_pool, _model_catalog_scope, _requests_model_decision, _spec_compatible, _task_specs, assign_task_specs, build_question_specs, generate_questions, plan_modality_sampling, question_writer_payload, validate_question, write_coverage_report
+from api_sft.questions import QUESTION_AUDIT_FORMAT_VERSION, QUESTION_CONTRACT_VERSION, QUESTION_RUNTIME_FORMAT_VERSION, QUESTION_RUNTIME_KEYS, UNIVERSAL_INGEST_TOOLS, _candidate_tool_pool, _model_catalog_scope, _requests_model_decision, _spec_compatible, _task_specs, assign_task_specs, build_question_specs, generate_questions, plan_modality_sampling, question_writer_payload, validate_question, write_coverage_report
 from api_sft.scenarios import ARCHETYPES, TASK_RATIOS, WIDE_PANEL_LAYOUT, create_scenario, generate_scenarios, persist_scenario, rebuild_scenario_manifest, render_images, render_images_from_observed, to_wide_panel
 from api_sft.signal_generator import DEFAULT_COMPLEXITY_MIX, complexity_schedule, render_signal, sample_signal_spec
 from api_sft.verify import deterministic_review
@@ -276,21 +276,47 @@ class QuestionTests(unittest.TestCase):
             "id":row_id,"question_spec_version":"4.0","question_spec_hash":stable_hash({"id":row_id,"mode":mode,"scenario":"hash"}),"question_group_id":pair_id,"scenario_id":"scenario_x","pair_id":pair_id,"is_paired":True,"pair_role":mode,"split_group":"scenario_x",
             "task":"data_profile","task_label":"数据画像","subtask_id":"profile_schema_frequency_index","subtask_title":"字段、频率与时间索引质量检查","task_goal":"forecast",
             "series_count":"single","history_length":"long","difficulty":"medium","input_mode":mode,"data_path":"/tmp/data.csv","dataset_attachment":{"path":"/tmp/data.csv","format":"csv","source_type":"local_path"},"images":["/tmp/x.png"] if mode=="image_text" else [],"image_inventory":["overview.png"] if mode=="image_text" else [],"image_attachments":[{"path":"/tmp/x.png","filename":"x.png","media_type":"image/png","source_type":"local_path"}] if mode=="image_text" else [],
-            "evidence_packet":{"schema":{"columns":["time","s01"]},"data_scale":{"row_count":803,"series_count":1,"history_length_per_series":803},"time_index":{"frequency":"synthetic_step","observed_range":{"start":"0","end":"802"}},"statistics":{"s01":{"mean":1.2}},"business_constraints":{"compute_budget":"low","interpretability":"required"}},
+            "evidence_packet":{"schema":{"columns":["time","s01"]},"data_scale":{"row_count":803,"series_count":1,"history_length_per_series":803},"time_index":{"frequency":"synthetic_step","observed_range":{"start":"0","end":"802"}},"statistics":{"s01":{"mean":1.2}},"business_constraints":{"compute_budget":"low","interpretability":"required","error_cost":"under_forecast_higher"},"known_future_covariates":[]},
             "visible_context":{},"recommended_mode":"text_only","image_value":"low","visual_reason":"x","recommended_plots":[],"text_can_answer":[],"image_should_answer":[],"requires_statistical_confirmation":[],
-            "model_catalog_scope":"none","system_prompt_id":"tsa_tool_execution_v1","system_prompt":"TOOL SYSTEM","message_format":"neutral_local_images_v1","trajectory_requirement":"tool_execution","candidate_tools":[],"primary_tools":["data_profile"],"required_answer_elements":["schema判断"],
+            "model_catalog_scope":"none","system_prompt_id":"tsa_tool_execution_v2","system_prompt":"TOOL SYSTEM","message_format":"neutral_local_images_v1","trajectory_requirement":"tool_execution","candidate_tools":[],"primary_tools":["data_profile"],"required_answer_elements":["schema判断"],
             "internal_rubric":{"task_instruction":"internal-only","required_elements":["schema判断"],"preferred_tools":["data_profile"],"image_policy":"low","expected_decision_points":2,"allowed_user_tool_mentions":[],"evidence_boundaries":[]},"scenario_hash":"hash",
         }
 
     def test_writer_payload_excludes_private_rubric_and_routing_labels(self):
         payload=question_writer_payload([self._question_spec("q1","text_only","pair")])
         raw=json.dumps(payload,ensure_ascii=False)
-        for forbidden in ["internal_rubric","preferred_tools","image_policy","recommended_mode","candidate_models","ground_truth"]:
+        for forbidden in ["internal_rubric","preferred_tools","image_policy","recommended_mode","candidate_models","ground_truth","visible_evidence","statistics","data_scale","observed_range","series_count","history_length","input_modes","available_image_types","difficulty","fine_grained_task"]:
             self.assertNotIn(forbidden,raw)
+        self.assertIn("investigation_topic",payload["task"])
+        self.assertIn("结果未知",payload["task"]["investigation_topic"])
+        self.assertEqual(payload["required_output"]["required_decision_count"],2)
+        self.assertIn("decision_constraints",payload["external_context"])
+        self.assertIn("resource_semantics",payload["external_context"])
         self.assertIn("forbidden",payload["decision_boundaries"]["model_selection"])
 
+    def test_writer_payload_is_safe_across_task_goals(self):
+        cases=[
+            ("model_selection","forecast","selection_history_length","known_future_covariates"),
+            ("data_profile","diagnosis","profile_schema_frequency_index",None),
+            ("similarity_analysis","sequence_anomaly_detection","similarity_anomalous_series","comparison_purpose"),
+            ("model_result_analysis","monitoring_retraining","result_data_concept_drift","decision_objective"),
+            ("tool_use","point_anomaly_detection","tool_anomaly_change_order","detection_granularity"),
+        ]
+        for task,goal,subtask,expected_context_key in cases:
+            spec=self._question_spec(f"q_{task}","text_only",f"g_{task}")
+            spec.update({"task":task,"task_label":task,"task_goal":goal,"subtask_id":subtask,"subtask_title":subtask})
+            payload=question_writer_payload([spec]); raw=json.dumps(payload,ensure_ascii=False)
+            for forbidden in ["statistics","data_scale","series_count","history_length","missing_ratio","observed_range","\"mean\"","\"std\""]:
+                self.assertNotIn(forbidden,raw,(task,goal))
+            self.assertIn("decision_constraints",raw)
+            self.assertIn("resource_semantics",raw)
+            if expected_context_key:
+                self.assertIn(expected_context_key,payload["external_context"].get("task_specific_context",{}),(task,goal))
+            if goal in {"point_anomaly_detection","sequence_anomaly_detection"}:
+                self.assertNotIn("under_forecast_higher",raw)
+
     def test_question_resume_revalidates_old_contract_and_rewrites_scope_conflict(self):
-        replacement={"user_request":"在可解释性约束下，请判断现有字段和时间索引是否足以安全进入后续分析，并决定还需补充哪些证据来排除不规则间隔风险，同时说明何时需要转换格式。","decision_points":["判断索引证据是否充分","决定补充证据与转换条件"],"constraint_key":"interpretability","facts_used":["schema.columns"]}
+        replacement={"user_request":"在可解释性约束下，请判断数据的字段角色和时间索引是否适合后续分析，并决定还需检查哪些证据来排除不规则间隔风险，同时说明何时需要转换格式。","decision_points":["判断索引是否适用","决定检查证据与转换条件"],"constraint_key":"interpretability","business_facts_used":["decision_constraints.interpretability"]}
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); specs=root/"specs.jsonl"; output=root/"questions.jsonl"; rejected=root/"rejected.jsonl"; prompt=root/"writer.txt"; prompt.write_text("只输出JSON")
             spec=self._question_spec("q1","text_only","q1"); write_jsonl(specs,[spec])
@@ -299,28 +325,35 @@ class QuestionTests(unittest.TestCase):
             with patch("api_sft.questions.OpenAICompatibleClient.complete",return_value=(json.dumps(replacement,ensure_ascii=False),{},.1)) as complete:
                 rows=generate_questions(specs,output,rejected,{"base_url":"https://example/v1","model":"writer","api_key":"secret"},prompt,resume=True)
         self.assertEqual(complete.call_count,1)
-        self.assertEqual(rows[0]["question_contract_version"],QUESTION_CONTRACT_VERSION)
-        self.assertNotIn("选择一个可解释的预测模型",rows[0]["user_request"])
+        self.assertEqual(rows[0]["format_version"],QUESTION_RUNTIME_FORMAT_VERSION)
+        self.assertNotIn("选择一个可解释的预测模型",rows[0]["prompt"]["user_request"])
 
     def test_direct_writer_keeps_paired_question_text_identical(self):
-        response={"user_request":"我们准备把这批序列接入日常预测。在低算力约束下，请判断现有材料是否足以确认时间索引可以安全进入建模，并决定还需要补充哪些证据以排除泄漏或不规则间隔风险，同时说明何时才需要进行格式转换。","decision_points":["判断现有材料是否充分","决定需要补充的证据"],"constraint_key":"compute_budget","facts_used":["schema.columns","time_index.frequency","business_constraints.compute_budget"]}
+        response={"user_request":"我们准备把这批序列接入日常预测。在低算力约束下，请判断字段角色和时间索引是否适合安全建模，并决定需要检查哪些证据以排除泄漏或不规则间隔风险，同时说明何时才需要转换格式。","decision_points":["判断数据是否适用","决定检查证据与转换条件"],"constraint_key":"compute_budget","business_facts_used":["decision_constraints.compute_budget","resource_semantics"]}
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); specs=root/"specs.jsonl"; output=root/"questions.jsonl"; rejected=root/"rejected.jsonl"; prompt=root/"writer.txt"
             write_jsonl(specs,[self._question_spec("q1","text_only","pair"),self._question_spec("q2","image_text","pair")]); prompt.write_text("只输出JSON",encoding="utf-8")
             with patch("api_sft.questions.OpenAICompatibleClient.complete",return_value=(json.dumps(response,ensure_ascii=False),{"total_tokens":10},.1)) as complete:
                 rows=generate_questions(specs,output,rejected,{"base_url":"https://example/v1","model":"writer","api_key":"secret"},prompt,max_attempts=2)
-        self.assertEqual(len(rows),2); self.assertEqual(rows[0]["question"],rows[1]["question"])
+            audits=[json.loads(line) for line in (root/"questions.audit.jsonl").read_text().splitlines()]
+        self.assertEqual(len(rows),2); self.assertEqual(rows[0]["prompt"]["user_request"],rows[1]["prompt"]["user_request"])
         self.assertEqual(complete.call_count,1)
-        self.assertNotIn("答案必须覆盖",rows[0]["question"]); self.assertNotIn("Top-3",rows[0]["question"])
-        self.assertEqual(rows[0]["question_generation"]["model"],"writer")
-        self.assertEqual(rows[0]["messages"][0],{"role":"system","content":"TOOL SYSTEM"})
-        self.assertIn("dataset_path: /tmp/data.csv",rows[0]["messages"][1]["content"])
-        self.assertEqual(rows[0]["messages"][1]["content"].count("<image>"),0)
-        self.assertEqual(rows[1]["messages"][1]["content"].count("<image>"),1)
-        self.assertEqual(rows[1]["image_attachments"][0]["path"],"/tmp/x.png")
+        self.assertEqual(set(rows[0]),QUESTION_RUNTIME_KEYS)
+        self.assertEqual(set(rows[0]["spec_ref"]),{"version","hash"})
+        self.assertEqual(set(rows[0]["task"]),{"category","subtask_id","goal","input_mode","model_catalog_scope"})
+        self.assertEqual(set(rows[0]["prompt"]),{"system_prompt_id","user_request"})
+        self.assertEqual(set(rows[0]["resources"]),{"dataset","images"})
+        self.assertEqual(set(rows[0]["resources"]["dataset"]),{"path","format"})
+        self.assertLess(sum(len(json.dumps(row,ensure_ascii=False)) for row in rows)/len(rows),5000)
+        self.assertNotIn("question_quality",rows[0]); self.assertNotIn("question_generation",rows[0])
+        self.assertEqual(rows[0]["resources"]["images"],[])
+        self.assertEqual(rows[1]["resources"]["images"][0]["path"],"/tmp/x.png")
+        self.assertTrue(all(audit["format_version"]==QUESTION_AUDIT_FORMAT_VERSION for audit in audits))
+        self.assertEqual(audits[0]["question_generation"]["model"],"writer")
+        self.assertEqual(audits[0]["question_contract_version"],QUESTION_CONTRACT_VERSION)
 
     def test_direct_writer_retries_invalid_json_without_template_fallback(self):
-        response={"user_request":"我们准备把这批序列接入日常预测。在低算力约束下，请判断现有材料是否足以确认时间索引可以安全进入建模，并决定还需要补充哪些证据以排除泄漏或不规则间隔风险，同时说明何时才需要进行格式转换。","decision_points":["判断现有材料是否充分","决定需要补充的证据"],"constraint_key":"compute_budget","facts_used":["schema.columns"]}
+        response={"user_request":"我们准备把这批序列接入日常预测。在低算力约束下，请判断字段角色和时间索引是否适合安全建模，并决定需要检查哪些证据来排除泄漏或不规则间隔风险，同时说明何时需要转换格式。","decision_points":["判断数据是否适用","决定检查证据与转换条件"],"constraint_key":"compute_budget","business_facts_used":["decision_constraints.compute_budget"]}
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); specs=root/"specs.jsonl"; output=root/"questions.jsonl"; rejected=root/"rejected.jsonl"; prompt=root/"writer.txt"
             write_jsonl(specs,[self._question_spec("q1","text_only","q1")]); prompt.write_text("只输出JSON",encoding="utf-8")
@@ -337,8 +370,8 @@ class QuestionTests(unittest.TestCase):
             self.assertEqual(rows,[]); self.assertTrue(rejected.exists()); self.assertNotIn("coverage_template",rejected.read_text(encoding="utf-8"))
 
     def test_question_resume_invalidates_changed_spec_hash(self):
-        first={"user_request":"在低算力约束下，请判断现有结构化材料能否支持时间索引质量结论，并确定还需要哪些证据来排除泄漏，同时说明何时需要转换数据格式。","decision_points":["判断证据充分性","决定补充检查"],"constraint_key":"compute_budget","facts_used":["schema.columns"]}
-        second={"user_request":"我们准备把更新后的序列接入日常预测。在可解释性要求下，请重新判断现有材料是否足以确认时间索引可以安全进入建模，并决定还需要补充哪些真实证据来排除泄漏或不规则间隔风险，同时说明何时才有必要转换数据格式。","decision_points":["重新判断证据充分性","决定补充证据与转换条件"],"constraint_key":"interpretability","facts_used":["schema.columns"]}
+        first={"user_request":"在低算力约束下，请判断字段角色与时间索引是否适合后续分析，并确定需要检查哪些证据来排除泄漏，同时说明何时需要转换数据格式。","decision_points":["判断数据是否适用","决定补充检查"],"constraint_key":"compute_budget","business_facts_used":["decision_constraints.compute_budget"]}
+        second={"user_request":"在可解释性要求下，请重新判断字段角色与时间索引是否适合后续分析，并决定需要检查哪些证据来排除泄漏或不规则间隔风险，同时说明何时有必要转换格式。","decision_points":["重新判断数据是否适用","决定检查证据与转换条件"],"constraint_key":"interpretability","business_facts_used":["decision_constraints.interpretability"]}
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); specs=root/"specs.jsonl"; output=root/"questions.jsonl"; rejected=root/"rejected.jsonl"; prompt=root/"writer.txt"; prompt.write_text("只输出JSON")
             spec=self._question_spec("q1","text_only","q1"); write_jsonl(specs,[spec])
@@ -347,7 +380,21 @@ class QuestionTests(unittest.TestCase):
             spec["question_spec_hash"]="changed_hash"; write_jsonl(specs,[spec])
             with patch("api_sft.questions.OpenAICompatibleClient.complete",return_value=(json.dumps(second,ensure_ascii=False),{},.1)) as complete:
                 updated=generate_questions(specs,output,rejected,{"base_url":"https://example/v1","model":"writer","api_key":"secret"},prompt,resume=True)
-        self.assertEqual(complete.call_count,1); self.assertNotEqual(original[0]["user_request"],updated[0]["user_request"]); self.assertEqual(updated[0]["question_spec_hash"],"changed_hash")
+        self.assertEqual(complete.call_count,1); self.assertNotEqual(original[0]["prompt"]["user_request"],updated[0]["prompt"]["user_request"]); self.assertEqual(updated[0]["spec_ref"]["hash"],"changed_hash")
+
+    def test_question_resume_reuses_valid_runtime_and_audit(self):
+        response={"user_request":"在低算力约束下，请判断字段角色与时间索引是否适合后续分析，并确定需要检查哪些证据来排除泄漏，同时说明何时需要转换数据格式。","decision_points":["判断数据是否适用","决定补充检查"],"constraint_key":"compute_budget","business_facts_used":["decision_constraints.compute_budget"]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); specs=root/"specs.jsonl"; output=root/"questions.jsonl"; rejected=root/"rejected.jsonl"; prompt=root/"writer.txt"; prompt.write_text("只输出JSON")
+            write_jsonl(specs,[self._question_spec("q1","text_only","q1")])
+            with patch("api_sft.questions.OpenAICompatibleClient.complete",return_value=(json.dumps(response,ensure_ascii=False),{},.1)):
+                first=generate_questions(specs,output,rejected,{"base_url":"https://example/v1","model":"writer","api_key":"secret"},prompt)
+            with patch("api_sft.questions.OpenAICompatibleClient.complete") as complete:
+                second=generate_questions(specs,output,rejected,{"base_url":"https://example/v1","model":"writer","api_key":"secret"},prompt,resume=True)
+            audit=json.loads((root/"questions.audit.jsonl").read_text())
+        self.assertEqual(first,second)
+        self.assertEqual(complete.call_count,0)
+        self.assertEqual(audit["question_contract_version"],QUESTION_CONTRACT_VERSION)
 
     def test_question_spec_resume_invalidates_changed_scenario_hash(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -369,9 +416,19 @@ class QuestionTests(unittest.TestCase):
 
     def test_unseen_number_and_answer_blueprint_are_rejected(self):
         spec=self._question_spec("q1","text_only","pair")
-        metadata={"decision_points":["a","b"],"constraint_key":"compute_budget","facts_used":["schema.columns"]}
+        metadata={"decision_points":["a","b"],"constraint_key":"compute_budget","business_facts_used":["decision_constraints.compute_budget"]}
         quality=validate_question("请按照以下步骤分析，并给出 Top-3 候选；数据一共有999行，最后完成模型选择和风险判断。"*2,spec,metadata)
         self.assertFalse(quality["passed"]); self.assertFalse(quality["checks"]["no_answer_blueprint"]); self.assertFalse(quality["checks"]["grounded_numbers"])
+
+    def test_observed_data_findings_must_be_questions_not_assertions(self):
+        spec=self._question_spec("q1","text_only","pair")
+        metadata={"decision_points":["判断缺失","决定处理"],"constraint_key":"compute_budget","business_facts_used":["decision_constraints.compute_budget"]}
+        asserted=validate_question("在低算力约束下，这批序列都有不同程度的缺失，请决定插补方式并评估后续分析风险，同时给出处理建议。"*2,spec,metadata)
+        residual_asserted=validate_question("在低算力约束下，模型残差均值偏离零，请评估校准方式及其风险，并决定是否需要重新验证。"*2,spec,metadata)
+        uncertain=validate_question("在低算力约束下，请判断这批序列是否存在缺失及其位置模式，并决定是否需要插补，同时评估不同处理对后续分析的风险。"*2,spec,metadata)
+        self.assertFalse(asserted["checks"]["no_derived_findings"])
+        self.assertFalse(residual_asserted["checks"]["no_derived_findings"])
+        self.assertTrue(uncertain["checks"]["no_derived_findings"])
 
 
 class ApiAndVerificationTests(unittest.TestCase):

@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from api_sft.common import write_jsonl
-from api_sft.cli import _assert_resumable_trajectory_formats, archive_trajectory_run
+from api_sft.cli import _assert_resumable_question_formats, _assert_resumable_trajectory_formats, archive_question_run, archive_trajectory_run
 from api_sft.trajectories import COMPETITION_AUDIT_FORMAT_VERSION, TRAJECTORY_FORMAT_VERSION, TrajectoryGenerationError, _generate_candidate, _search_model_catalog, _select_with_judge, generate_one_trajectory, generate_trajectories
 from api_sft.trajectory_exporters import _trl_record, export_trajectory_datasets
 from api_sft.trajectory_verify import deterministic_trajectory_review, verify_trajectories
@@ -79,26 +79,55 @@ class FakeRuntime:
 def question_row() -> dict:
     return {
         "id": "q1",
-            "question_spec_version": "4.0",
-        "trajectory_requirement": "tool_execution",
-        "question": "请分析 /absolute/source.csv 的结构，并决定后续预测策略。\n- dataset_path: /absolute/source.csv",
-        "user_request": "请分析结构并决定后续预测策略。",
-        "data_path": "/absolute/source.csv",
-        "images": [],
-        "input_mode": "text_only",
-        "system_prompt": "只能依据真实工具结果回答。",
-        "task": "data_profile",
-        "subtask_id": "profile_schema_frequency_index",
-        "task_goal": "forecast",
-        "series_count": "single",
-        "history_length": "long",
-        "model_catalog_scope": "none",
-        "candidate_tools": [{"name": "data_profile"}, {"name": "summary_stats"}],
-        "primary_tools": ["data_profile"],
+        "format_version": "question_runtime_v1",
+        "spec_ref": {"version": "4.0", "hash": "question-hash"},
+        "task": {
+            "category": "data_profile",
+            "subtask_id": "profile_schema_frequency_index",
+            "goal": "forecast",
+            "input_mode": "text_only",
+            "model_catalog_scope": "none",
+        },
+        "prompt": {
+            "system_prompt_id": "tsa_tool_execution_v2",
+            "user_request": "请分析数据结构并决定后续预测策略。",
+        },
+        "resources": {
+            "dataset": {"path": "/absolute/source.csv", "format": "csv"},
+            "images": [],
+        },
+        "allowed_tools": ["data_profile", "summary_stats"],
     }
 
 
 class TrajectoryTests(unittest.TestCase):
+    def test_fresh_archive_moves_question_outputs_recoverably(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            mapping={
+                "questions":root/"questions.final.jsonl",
+                "question_audit":root/"questions.audit.jsonl",
+                "question_rejected":root/"questions.rejected.jsonl",
+                "coverage":root/"coverage_report.json",
+                "question_archives":root/"archives",
+            }
+            write_jsonl(mapping["questions"],[{"id":"q1"}])
+            write_jsonl(mapping["question_audit"],[{"id":"q1"}])
+            mapping["coverage"].write_text("{}",encoding="utf-8")
+            archive=archive_question_run(mapping)
+            self.assertIsNotNone(archive)
+            self.assertFalse(mapping["questions"].exists())
+            manifest=json.loads((archive/"archive_manifest.json").read_text())
+            self.assertEqual({entry["archived_as"] for entry in manifest["entries"]},{"questions.final.jsonl","questions.audit.jsonl","coverage_report.json"})
+            self.assertTrue((archive/"questions.final.jsonl").exists())
+
+    def test_resume_rejects_stale_or_incomplete_question_protocol(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); final=root/"questions.final.jsonl"; audit=root/"questions.audit.jsonl"
+            write_jsonl(final,[{"id":"q1","format_version":"question_contract_v2"}])
+            with self.assertRaisesRegex(RuntimeError,"use --fresh"):
+                _assert_resumable_question_formats({"questions":final,"question_audit":audit})
+
     def test_fresh_archive_moves_all_trajectory_outputs_recoverably(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
@@ -139,6 +168,8 @@ class TrajectoryTests(unittest.TestCase):
             self.assertNotIn(forbidden,system)
         self.assertNotIn("/absolute/source.csv", json.dumps(record["messages"], ensure_ascii=False))
         self.assertNotIn("/private/tmp/session_test", json.dumps(record["messages"], ensure_ascii=False))
+        self.assertEqual(record["messages"][1]["content"],"请分析数据结构并决定后续预测策略。\n\n可访问的数据资源：\n- dataset_path: uploads/dataset.csv")
+        self.assertNotIn("已提供的结构化材料",record["messages"][1]["content"])
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             raw = root / "raw.jsonl"
@@ -290,7 +321,7 @@ class TrajectoryTests(unittest.TestCase):
                 else:
                     message={"role":"assistant","content":"目录查询真实返回了 ForecastOnly。当前只把它作为候选，并建议结合时间顺序回测、业务误差代价和部署约束再决定；现有目录记录本身不能证明未来精度。"}
                 return message,{"total_tokens":4},.01,"tool_calls" if self.turn==1 else "stop"
-        row=question_row(); row["model_catalog_scope"]="forecast"
+        row=question_row(); row["task"]["model_catalog_scope"]="forecast"
         models=[{"name":"ForecastOnly","package":"p","runtime_type":"foundation","tasks":["forecast"]},{"name":"AnomalyOnly","package":"p","runtime_type":"tslib","tasks":["anomaly_detection"]}]
         record=generate_one_trajectory(row,CatalogClient(),FakeRuntime(),model_catalog=models)
         self.assertTrue(deterministic_trajectory_review(record,model_catalog=models)["passed"])
@@ -356,7 +387,7 @@ class TrajectoryTests(unittest.TestCase):
         response={"candidate_scores":[{"candidate_index":0,"total_score":20},{"candidate_index":1,"total_score":21}],"winner":1,"rationale":"candidate 1"}
         with tempfile.TemporaryDirectory() as tmp:
             initial=Path(tmp)/"initial.png"; tool_image=Path(tmp)/"tool.png"; initial.write_bytes(b"png"); tool_image.write_bytes(b"png")
-            row=question_row(); row["images"]=[str(initial)]; first["tool_events"][0]["image_paths"]=[str(tool_image)]
+            row=question_row(); row["resources"]["images"]=[{"path":str(initial),"media_type":"image/png"}]; first["tool_events"][0]["image_paths"]=[str(tool_image)]
             with patch("api_sft.trajectories.OpenAICompatibleClient.complete",return_value=(json.dumps(response),{"total_tokens":3},.01)) as complete:
                 winner,audit=_select_with_judge(row,[first,second],reviews,{"base_url":"https://judge.test/v1","model":"judge","api_key":"x"})
         sent=complete.call_args.args[0][1]["content"]

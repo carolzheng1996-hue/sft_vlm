@@ -101,8 +101,18 @@ def export_trajectory_datasets(verified_path: Path, output_dir: Path) -> dict[st
     trl = [_trl_record(record) for record in records]
     write_jsonl(output_dir / "trajectories.full.jsonl", records)
     write_jsonl(output_dir / "train_trl_tool_messages.jsonl", trl)
-    task_counts = Counter(record["question_record"].get("task") for record in records)
-    modality_counts = Counter(record["question_record"].get("input_mode") for record in records)
+    task_counts = Counter(
+        (record["question_record"].get("task") or {}).get("category")
+        if isinstance(record["question_record"].get("task"), dict)
+        else record["question_record"].get("task")
+        for record in records
+    )
+    modality_counts = Counter(
+        (record["question_record"].get("task") or {}).get("input_mode")
+        if isinstance(record["question_record"].get("task"), dict)
+        else record["question_record"].get("input_mode")
+        for record in records
+    )
     tool_counts = Counter(event.get("name") for record in records for event in record.get("tool_events", []) if event.get("ok"))
     summary = {
         "accepted_records": len(records),

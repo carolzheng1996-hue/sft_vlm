@@ -10,9 +10,12 @@ from .compact_json import append_jsonl, json_safe, strict_dumps
 from .trajectories import (
     _candidate_tiebreak_key,
     _generate_candidate,
+    _runtime_task,
+    _runtime_user_content,
     _sanitize_tool_result,
     _select_with_judge,
 )
+from .questions import QUESTION_RUNTIME_FORMAT_VERSION
 from .trajectory_verify import deterministic_trajectory_review
 
 
@@ -175,15 +178,13 @@ def _question_view(row: dict[str, Any], candidate: dict[str, Any] | None = None)
     if len(messages) > 1 and messages[1].get("role") == "user":
         text = str(messages[1].get("content") or "")
     else:
-        text = str(row.get("question") or "")
-        original = str(row.get("data_path") or "")
-        if original:
-            text = text.replace(original, "uploads/dataset.csv")
+        text = _runtime_user_content(row, "uploads/dataset.csv")
+    task = _runtime_task(row)
     result = {
         "text": text,
-        "task": row.get("task"),
-        "input_mode": row.get("input_mode"),
-        "model_catalog_scope": row.get("model_catalog_scope", "none"),
+        "task": task.get("category"),
+        "input_mode": task.get("input_mode"),
+        "model_catalog_scope": task.get("model_catalog_scope", "none"),
     }
     return {key: json_safe(value) for key, value in result.items() if value is not None}
 
@@ -356,9 +357,9 @@ def generate_trajectories(
     completed = done_ids(output_path) if resume else set()
     rows = list(iter_jsonl(input_path))
     rows = rows[:limit] if limit else rows
-    stale = [row.get("id") for row in rows if row.get("question_spec_version") != "4.0"]
+    stale = [row.get("id") for row in rows if row.get("format_version") != QUESTION_RUNTIME_FORMAT_VERSION]
     if stale:
-        raise RuntimeError(f"Compact trajectories require QuestionSpec 4.0: {', '.join(map(str, stale[:3]))}")
+        raise RuntimeError(f"Compact trajectories require {QUESTION_RUNTIME_FORMAT_VERSION}: {', '.join(map(str, stale[:3]))}")
     for row in rows:
         if row["id"] in completed:
             continue

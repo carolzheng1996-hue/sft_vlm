@@ -440,7 +440,7 @@ V4 分别保存：
 
 ### 4.9 图片证据边界
 
-`visible_context.json` 只含可从观测数据计算或业务侧明确给出的信息，可进入 Question；`ground_truth.json` 只能供最终 verifier 使用。普通图片生成函数不接收 `truth`：
+`visible_context.json` 只含可从观测数据计算或业务侧明确给出的信息，用于构造内部 QuestionSpec；其中的统计摘要不再进入 Question Writer 或最终用户消息。`ground_truth.json` 只能供最终 verifier 使用。普通图片生成函数不接收 `truth`：
 
 - STL 的周期来自观测序列的去趋势 FFT 候选，而非真实周期。
 - 异常候选来自滚动中位数与 robust z-score，而非注入位置。
@@ -611,11 +611,10 @@ flowchart TD
     C --> D[确定性 QuestionSpec]
     D --> E[Question Writer LLM]
     E --> F[自然 user_request]
-    D --> G[确定性 context_block]
-    F --> H[最终 question]
-    G --> H
-    H --> I[泄漏、复杂度和重复检查]
-    I -->|通过| J[questions.final.jsonl]
+    F --> I[泄漏、复杂度和重复检查]
+    D --> I
+    I -->|通过| J[紧凑 questions.final.jsonl]
+    I -->|审计| M[questions.audit.jsonl]
     I -->|失败| K[携带反馈重试]
     K -->|再次失败| L[questions.rejected.jsonl]
 ```
@@ -627,7 +626,7 @@ flowchart TD
 - 场景与细粒度任务匹配。
 - 模态采样和严格配对。
 - 从真实 CSV 与 `visible_context` 构造 schema、规模、时间范围、频率、统计摘要和业务约束证据包。
-- 选择图片附件，但只把图片文件类型提供给 Question Writer，不发送图片像素。
+- 选择最终运行时图片附件；Question Writer 既不接收图片像素，也不接收图片清单或推荐模态。
 - 保存内部 rubric、工具目录、模型目录和路由监督。
 
 模型路由标签为：
@@ -636,7 +635,7 @@ flowchart TD
 - `conditional`：训练动态、漂移诊断、重训练与回滚。
 - `not_required`：其他画像、相似性诊断和工具使用任务。
 
-每条记录使用 `system_prompt_id=tsa_tool_execution_v1` 和 `trajectory_requirement=tool_execution`。
+每条记录使用 `system_prompt_id=tsa_tool_execution_v2` 和 `trajectory_requirement=tool_execution`。
 
 QuestionSpec 4.0 额外保存 `question_spec_hash`，由 V4 场景 hash、细粒度任务、模态、证据包、图片清单和 System Prompt 版本确定。旧版问题不跨协议复用。
 
@@ -644,21 +643,24 @@ QuestionSpec 4.0 额外保存 `question_spec_hash`，由 V4 场景 hash、细粒
 
 Question Writer 看到：
 
-- 一级任务名称、细粒度任务标题和业务目标。
-- 单/多序列、长/短历史和难度。
-- `input_mode` 集合与可用图片类型清单。
-- 确定性的可见证据包。
+- 一级任务名称、标记为“结果未知”的待调查主题和业务目标。
+- 纯生成约束 `required_decision_count`；不提供数据规模或难度标签。
+- 延迟、算力、解释性、错误代价等外部业务约束。
+- 实际值、预测值、残差、区间等资源语义角色。
+- 仅在对应任务需要时提供预测范围、未来协变量、层级或异常检测目标等外部事实。
 
 Question Writer 看不到：
 
 - `internal_rubric`、`required_elements`、`preferred_tools` 和 `image_policy`。
 - 推荐模态、候选模型和模型目录。
+- 行数、序列数、历史长短、精确列名、时间范围和统计摘要。
+- 缺失、趋势、周期、异常、变点、相关性等可由工具发现的数据属性。
 - `ground_truth.json`、场景 `pattern`、异常位置、周期、斜率或漂移起点。
 - 原始 CSV 和图片像素。
 
-LLM 只生成 `user_request`、审计用 `decision_points`、`constraint_key` 和 `facts_used`。程序随后追加不可改写的结构化 `context_block`。严格配对只调用一次 LLM，两条记录拥有完全相同的问题文本，仅图片附件不同。
+LLM 只生成 `user_request`、审计用 `decision_points`、`constraint_key` 和 `business_facts_used`。程序不再追加结构化证据；轨迹运行时只追加暂存后的 dataset URI。严格配对只调用一次 LLM，两条记录拥有完全相同的问题文本，仅图片资源不同。
 
-最终 QuestionRecord 继承 `question_spec_hash`。`generate-questions --resume` 会丢弃 hash 不匹配的旧问题，只为变化的规格重新调用 Writer；未变化的问题仍可复用。
+最终 QuestionRecord 通过 `spec_ref.hash` 引用 `question_spec_hash`。`generate-questions --resume` 会联合 final 和 audit 校验运行协议、Writer Prompt ID、Question Contract 版本和 spec hash；任何一项不匹配都会重新调用 Writer。
 
 ## 8. System Prompt 与用户问题边界
 
@@ -672,7 +674,7 @@ LLM 只生成 `user_request`、审计用 `decision_points`、`constraint_key` �
 - 与任务无关的 baseline、Top-3、回测和不选理由；
 - 对图片内容的提前描述。
 
-Question Writer 使用独立的 `prompts/question_writer_system.txt`，它不等于最终训练消息中的 Agent System Prompt。Question Contract v2 会在 `--resume` 时重新校验旧问题；合法记录直接复用，违反 `model_catalog_scope` 决策边界的问题组才重新生成。
+Question Writer 使用独立的 `prompts/question_writer_system.txt`，它不等于最终训练消息中的 Agent System Prompt。Question Contract v3 会在 `--resume` 时联合 final 与 audit 重新校验；旧协议、缺少 audit、派生结论或违反 `model_catalog_scope` 的问题组会重新生成。
 
 ## 9. 问题质量规则
 
@@ -683,8 +685,9 @@ Question Writer 使用独立的 `prompts/question_writer_system.txt`，它不等
 - 使用一个真实存在的业务约束。
 - 不退化为单一事实判断。
 - 不包含答案提纲或通用执行流程。
-- 不包含证据包之外的精确数字。
-- `facts_used` 只能引用真实存在的证据路径。
+- 数字只能来自允许的外部业务条件，不能来自数据统计。
+- `business_facts_used` 只能引用真实存在的 `external_context` 路径。
+- 缺失、趋势、周期、异常等数据属性必须写成待判断事项，不能写成既有结论。
 - 不泄露候选模型或未授权工具名。
 - 保持模态中性，不声称附图已经显示某个结论。
 
@@ -697,7 +700,8 @@ Question Writer 使用独立的 `prompts/question_writer_system.txt`，它不等
 主要输出：
 
 - `question_specs.jsonl`：确定性规格和内部 rubric。
-- `questions.final.jsonl`：LLM 生成并通过检查的最终问题。
+- `questions.final.jsonl`：通过检查的紧凑运行问题。
+- `questions.audit.jsonl`：Writer 尝试、质量检查、决策点和约束引用。
 - `questions.rejected.jsonl`：问题生成阶段失败记录。
 - `coverage_report.json`：基于最终通过问题计算的覆盖结果。
 
@@ -706,48 +710,25 @@ Question Writer 使用独立的 `prompts/question_writer_system.txt`，它不等
 ```json
 {
   "id": "scenario_00001_q01_text_only",
-  "question_group_id": "pair_scenario_00001_profile_schema_frequency_index",
-  "scenario_id": "scenario_00001",
-  "task": "data_profile",
-  "subtask_id": "profile_schema_frequency_index",
-  "input_mode": "text_only",
-  "model_catalog_scope": "none",
-  "data_layout": "wide_panel_v1",
-  "system_prompt_id": "tsa_tool_execution_v2",
-  "system_prompt": "<完整 Tool-execution System Prompt>",
-  "trajectory_requirement": "tool_execution",
-  "data_path": "/absolute/path/to/data.csv",
-  "dataset_attachment": {
-    "path": "/absolute/path/to/data.csv",
-    "format": "csv",
-    "source_type": "local_path"
+  "format_version": "question_runtime_v1",
+  "spec_ref": {"version": "4.0", "hash": "..."},
+  "task": {
+    "category": "data_profile",
+    "subtask_id": "profile_schema_frequency_index",
+    "goal": "diagnosis",
+    "input_mode": "text_only",
+    "model_catalog_scope": "none"
   },
-  "user_request": "...",
-  "context_block": "...",
-  "question": "user_request + context_block",
-  "messages": [
-    {"role": "system", "content": "<完整 Tool-execution System Prompt>"},
-    {"role": "user", "content": "<image>\\n...完整问题及 dataset_path..."}
-  ],
-  "images": [],
-  "image_attachments": [],
-  "internal_rubric": {},
-  "question_generation": {},
-  "question_quality": {}
+  "prompt": {"system_prompt_id": "tsa_tool_execution_v2", "user_request": "..."},
+  "resources": {
+    "dataset": {"path": "/absolute/path/to/data.csv", "format": "csv"},
+    "images": []
+  },
+  "allowed_tools": ["data_profile", "data_quality_check"]
 }
 ```
 
-QuestionSpec 和 QuestionRecord 不保存 `truth_path` 或场景 `pattern`，但会保存可供工具执行的 `data_path`。该路径只指向观测 CSV，不指向隐藏真值。Question Writer 不会看到路径；路径由程序确定性加入最终 user content，防止 LLM 改写或臆造资源地址。
-
-每条最终 QuestionRecord 都是可直接消费的两消息输入：
-
-- `messages[0]`：完整 Tool-execution System Prompt，而不只是 Prompt ID。
-- `messages[1]`：最终 user content，包含自然业务问题、CSV 路径和确定性结构化材料。
-- `images`：图文样本的本地 PNG 路径，顺序与 user content 中的 `<image>` 标记一致。
-- `image_attachments`：图片文件名、媒体类型、来源类型与路径。
-- `dataset_attachment`：CSV 路径、格式与来源类型。
-
-这里采用 `message_format=neutral_local_images_v1`，避免把大体积 Base64 重复写入中立 JSONL。调用 OpenAI-compatible API 时，轨迹生成器将本地 PNG 转成标准 `image_url` data URL；导出 TRL 数据时则转换成顶层 `images` 和消息内的 `image` / `text` content blocks。
+QuestionSpec 和运行记录都不保存 `truth_path` 或场景 `pattern`。final 中的资源路径只供运行器暂存观测 CSV；模型实际看到的是 session 内的 `uploads/dataset.csv`。System Prompt、用户消息和图像 API 结构均在轨迹运行时动态构造，避免在 final 重复保存。
 
 覆盖报告继续检查五类一级任务、58 个细粒度任务、单/多序列、长/短历史、两种输入模态、三种推荐模式和 33 个工具的任务池监督。LLM 失败导致必需覆盖缺失时，`passed=false`。
 
