@@ -1,0 +1,27 @@
+# Copy this file to config.yaml and set the candidate endpoint, model, and API key.
+
+source:
+  questions: api_sft/output/concurrent_questions/questions.final.jsonl
+  model_catalog: api_sft/output/catalogs/models.normalized.json
+  tools_repo_root: /Users/monychen/Documents/tsa/claude_tsa
+
+# Kept separate from the existing two-candidate output.
+output_dir: api_sft/output_single_candidate
+
+trajectory_generation:
+  max_concurrency: 4
+  max_attempts: 2
+  min_tool_calls: 1
+  min_distinct_tools: 1
+  max_tool_calls: 8
+  max_tool_result_chars: 16000
+  timeout_seconds: 180
+  retries: 3
+
+models:
+  candidate:
+    name: single_trajectory_candidate
+    base_url: https://your-api-platform.example/v1
+    model: replace-with-model-name
+    api_key: replace-with-your-api-key
+    temperature: 0.2

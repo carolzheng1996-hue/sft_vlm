@@ -262,7 +262,7 @@ def do_questions(config: dict[str,Any], p: dict[str,Path], workspace: Path, mode
         if archived: print(json.dumps({"status":"archived_previous_question_run","output":str(archived)},ensure_ascii=False))
     generation=config.get("generation",{}); writer_path=resolve_path(generation.get("question_writer_prompt","api_sft/prompts/question_writer_system.txt"),workspace)
     cfg=dict(model_config); cfg.setdefault("timeout_seconds",int(generation.get("timeout_seconds",120))); cfg.setdefault("retries",int(generation.get("retries",3)))
-    rows=generate_questions(p["question_specs"],p["questions"],p["question_rejected"],cfg,writer_path,resume,limit,int(generation.get("question_max_attempts",2)),p["question_audit"])
+    rows=generate_questions(p["question_specs"],p["questions"],p["question_rejected"],cfg,writer_path,resume,limit,int(generation.get("question_max_attempts",3)),p["question_audit"])
     print(json.dumps({"questions":len(rows),"output":str(p["questions"]),"audit":str(p["question_audit"]),"rejected":str(p["question_rejected"]),"coverage":str(p["coverage"])},ensure_ascii=False))
 
 
@@ -316,7 +316,7 @@ def main() -> None:
     elif args.command=="rewrite-questions":
         print("WARNING: rewrite-questions 已弃用；当前命令等价于 generate-questions。")
         generation=config.get("generation",{}); writer_path=resolve_path(generation.get("question_writer_prompt","api_sft/prompts/question_writer_system.txt"),workspace)
-        rewrite_questions(p["question_specs"],p["questions"],p["question_rejected"],models["question"],writer_path,args.resume,args.limit,int(generation.get("question_max_attempts",2)),p["question_audit"])
+        rewrite_questions(p["question_specs"],p["questions"],p["question_rejected"],models["question"],writer_path,args.resume,args.limit,int(generation.get("question_max_attempts",3)),p["question_audit"])
     elif args.command=="generate-answers":
         try: generate_answers(p["questions"],p["candidates"],models.get("answer_vlms") or models.get("trajectory_candidates") or [],concurrency,timeout,retries,args.resume,args.limit)
         except RuntimeError as exc: raise SystemExit(str(exc)) from None

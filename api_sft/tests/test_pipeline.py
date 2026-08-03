@@ -17,7 +17,7 @@ from api_sft.catalogs import normalize_models, normalize_tools
 from api_sft.common import load_env_file, load_yaml, sha256_file, stable_hash, write_json, write_jsonl
 from api_sft.exporters import export_datasets
 from api_sft.answers import generate_answers
-from api_sft.questions import QUESTION_AUDIT_FORMAT_VERSION, QUESTION_CONTRACT_VERSION, QUESTION_RUNTIME_FORMAT_VERSION, QUESTION_RUNTIME_KEYS, TOOL_EXECUTION_SYSTEM_PROMPT, UNIVERSAL_INGEST_TOOLS, _candidate_tool_pool, _model_catalog_scope, _requests_model_decision, _spec_compatible, _task_specs, assign_task_specs, build_question_specs, generate_questions, plan_modality_sampling, question_writer_payload, validate_question, write_coverage_report
+from api_sft.questions import QUESTION_AUDIT_FORMAT_VERSION, QUESTION_CONTRACT_VERSION, QUESTION_RUNTIME_FORMAT_VERSION, QUESTION_RUNTIME_KEYS, TOOL_EXECUTION_SYSTEM_PROMPT, UNIVERSAL_INGEST_TOOLS, _candidate_tool_pool, _expression_profile, _model_catalog_scope, _requests_model_decision, _spec_compatible, _task_specs, assign_task_specs, build_question_specs, generate_questions, plan_modality_sampling, question_writer_payload, validate_question, validate_question_diversity, write_coverage_report
 from api_sft.scenarios import ARCHETYPES, TASK_RATIOS, WIDE_PANEL_LAYOUT, create_scenario, generate_scenarios, persist_scenario, rebuild_scenario_manifest, render_images, render_images_from_observed, to_wide_panel
 from api_sft.signal_generator import DEFAULT_COMPLEXITY_MIX, complexity_schedule, render_signal, sample_signal_spec
 from api_sft.verify import deterministic_review
@@ -244,6 +244,9 @@ class QuestionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             report=write_coverage_report([base],Path(tmp)/"coverage.json")
         self.assertFalse(report["passed"]); self.assertIn("task",report["missing_required_values"])
+        self.assertIn("expression_profile_counts",report["quality"])
+        self.assertIn("opening_family_counts",report["quality"])
+        self.assertIn("generic_possession_opening_ratio",report["quality"])
 
     def test_task_pool_covers_all_subtasks_and_tools(self):
         specs=_task_specs(ROOT/"api_sft"/"task_pool.yaml")
@@ -293,6 +296,36 @@ class QuestionTests(unittest.TestCase):
         self.assertIn("decision_constraints",payload["external_context"])
         self.assertIn("resource_semantics",payload["external_context"])
         self.assertIn("forbidden",payload["decision_boundaries"]["model_selection"])
+        self.assertEqual(payload["expression_profile"]["version"],"expression_profile_v1")
+        self.assertEqual(
+            set(payload["expression_profile"]),
+            {"version","profile_id","opening_mode","request_tone","information_order"},
+        )
+
+    def test_expression_profiles_are_stable_and_reasonably_balanced(self):
+        counts=collections.Counter()
+        for index in range(400):
+            spec=self._question_spec(f"q{index}","text_only",f"group_{index}")
+            first=_expression_profile([spec]); second=_expression_profile([spec])
+            self.assertEqual(first,second)
+            counts[first["profile_id"]]+=1
+        self.assertEqual(len(counts),8)
+        self.assertGreaterEqual(min(counts.values()),30)
+        self.assertLessEqual(max(counts.values()),70)
+
+    def test_cross_group_diversity_rejects_duplicates_and_overused_openings(self):
+        base="在进入下一阶段前，请判断字段角色和时间索引是否适合后续分析，并决定还需检查哪些证据来排除不规则间隔风险，同时说明何时需要转换格式。"
+        exact=validate_question_diversity(base,[("g1","q1",base)])
+        self.assertFalse(exact["checks"]["cross_group_unique"])
+        near=validate_question_diversity(base+"请。",[("g1","q1",base)])
+        self.assertFalse(near["checks"]["cross_group_near_unique"])
+        opening="在进入下一阶段前需要先判断"[:12]
+        first=opening+"甲"*70
+        second=opening+"乙"*70
+        candidate=opening+"丙"*70
+        repeated=validate_question_diversity(candidate,[("g1","q1",first),("g2","q2",second)])
+        self.assertFalse(repeated["checks"]["opening_prefix_not_overused"])
+        self.assertEqual(repeated["opening_prefix_prior_uses"],2)
 
     def test_writer_payload_is_safe_across_task_goals(self):
         cases=[
@@ -352,6 +385,36 @@ class QuestionTests(unittest.TestCase):
         self.assertTrue(all(audit["format_version"]==QUESTION_AUDIT_FORMAT_VERSION for audit in audits))
         self.assertEqual(audits[0]["question_generation"]["model"],"writer")
         self.assertEqual(audits[0]["question_contract_version"],QUESTION_CONTRACT_VERSION)
+        self.assertTrue(audits[0]["question_generation"]["expression_profile_id"])
+        self.assertEqual(
+            audits[0]["question_generation"]["expression_profile_id"],
+            audits[1]["question_generation"]["expression_profile_id"],
+        )
+        self.assertIn("diversity",audits[0]["question_generation"])
+
+    def test_direct_writer_retries_cross_group_duplicate(self):
+        first={"user_request":"在低算力约束下，请判断字段角色与时间索引是否适合后续分析，并决定还需检查哪些证据来排除不规则间隔风险，同时说明何时需要转换数据格式。","decision_points":["判断数据是否适用","决定检查证据与转换条件"],"constraint_key":"compute_budget","business_facts_used":["decision_constraints.compute_budget"]}
+        second={"user_request":"目前还不确定现有材料能否支持后续分析。考虑到结果必须可解释，请核验字段角色和时间索引，并根据核验结果决定是否转换格式以及还要补充哪些证据。","decision_points":["核验数据是否适用","决定转换条件与补充证据"],"constraint_key":"interpretability","business_facts_used":["decision_constraints.interpretability"]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); specs=root/"specs.jsonl"; output=root/"questions.jsonl"; rejected=root/"rejected.jsonl"; prompt=root/"writer.txt"
+            one=self._question_spec("q1","text_only","g1")
+            two=self._question_spec("q2","text_only","g2")
+            write_jsonl(specs,[one,two]); prompt.write_text("只输出JSON",encoding="utf-8")
+            replies=[
+                (json.dumps(first,ensure_ascii=False),{"total_tokens":8},.1),
+                (json.dumps(first,ensure_ascii=False),{"total_tokens":8},.1),
+                (json.dumps(second,ensure_ascii=False),{"total_tokens":8},.1),
+            ]
+            with patch("api_sft.questions.OpenAICompatibleClient.complete",side_effect=replies) as complete:
+                rows=generate_questions(specs,output,rejected,{"base_url":"https://example/v1","model":"writer","api_key":"secret"},prompt,max_attempts=2)
+            audits=[json.loads(line) for line in (root/"questions.audit.jsonl").read_text().splitlines()]
+        self.assertEqual(len(rows),2)
+        self.assertEqual(complete.call_count,3)
+        self.assertNotEqual(rows[0]["prompt"]["user_request"],rows[1]["prompt"]["user_request"])
+        self.assertEqual([attempt["status"] for attempt in audits[1]["question_generation"]["attempts"]],["validation_failed","accepted"])
+        failed_quality=audits[1]["question_generation"]["attempts"][0]["quality"]
+        self.assertFalse(failed_quality["checks"]["cross_group_unique"])
+        self.assertTrue(audits[1]["question_generation"]["diversity"]["passed"])
 
     def test_direct_writer_retries_invalid_json_without_template_fallback(self):
         response={"user_request":"我们准备把这批序列接入日常预测。在低算力约束下，请判断字段角色和时间索引是否适合安全建模，并决定需要检查哪些证据来排除泄漏或不规则间隔风险，同时说明何时需要转换格式。","decision_points":["判断数据是否适用","决定检查证据与转换条件"],"constraint_key":"compute_budget","business_facts_used":["decision_constraints.compute_budget"]}
@@ -430,6 +493,19 @@ class QuestionTests(unittest.TestCase):
         self.assertFalse(asserted["checks"]["no_derived_findings"])
         self.assertFalse(residual_asserted["checks"]["no_derived_findings"])
         self.assertTrue(uncertain["checks"]["no_derived_findings"])
+
+    def test_unprovided_count_frequency_and_history_cannot_be_asserted(self):
+        spec=self._question_spec("q1","text_only","pair")
+        metadata={"decision_points":["检查材料","决定后续"],"constraint_key":"compute_budget","business_facts_used":["decision_constraints.compute_budget"]}
+        count_asserted=validate_question("现有材料共有三组时间序列。在低算力约束下，请检查字段角色和时间索引，再决定是否转换格式以及还需补充哪些证据。"*2,spec,metadata)
+        frequency_asserted=validate_question("现有数据按日记录。在低算力约束下，请检查字段角色和时间索引，再决定是否转换格式以及还需补充哪些证据。"*2,spec,metadata)
+        history_asserted=validate_question("现有序列的历史较短。在低算力约束下，请检查字段角色和时间索引，再决定是否转换格式以及还需补充哪些证据。"*2,spec,metadata)
+        uncertain=validate_question("在低算力约束下，请判断材料是否包含多个序列、是否按日记录，并据此决定是否转换格式以及还需补充哪些证据。"*2,spec,metadata)
+        self.assertFalse(count_asserted["checks"]["no_ungrounded_data_counts"])
+        self.assertFalse(frequency_asserted["checks"]["no_ungrounded_frequency"])
+        self.assertFalse(history_asserted["checks"]["no_derived_findings"])
+        self.assertTrue(uncertain["checks"]["no_ungrounded_data_counts"])
+        self.assertTrue(uncertain["checks"]["no_ungrounded_frequency"])
 
 
 class ApiAndVerificationTests(unittest.TestCase):

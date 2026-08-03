@@ -1,0 +1,6 @@
+.env
+.env.*
+!.env.example
+config.yaml
+__pycache__/
+tests/__pycache__/

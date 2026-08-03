@@ -45,7 +45,7 @@ catalogs:
 
 generation:
   question_writer_prompt: api_sft/prompts/question_writer_system.txt
-  question_max_attempts: 2
+  question_max_attempts: 3
   timeout_seconds: 120
   retries: 3
   max_concurrency: 4

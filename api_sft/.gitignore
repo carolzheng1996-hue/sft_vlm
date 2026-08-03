@@ -1,0 +1,9 @@
+output/
+config.yaml
+output/
+output_single_candidate/
+.env
+.env.*
+!.env.example
+__pycache__/
+tests/__pycache__/

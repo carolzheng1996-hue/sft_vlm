@@ -14,8 +14,19 @@
 10. 不声称图片已经显示某种现象，不写“请看图”或“结合所给图像”。
 11. 除明确的工具边界题外，不主动点名具体工具；不得提前给出具体模型名称。
 12. 严格遵守 decision_boundaries.model_selection：为 forbidden 时，不得要求推荐、比较、选择、部署或替换任何预测/异常检测模型，应把决策限定在数据检查、转换、诊断或需要补充的证据；允许 existing labeled model/result comparison 时只能比较材料中已有的匿名模型 A/B 结果，不得引入新模型族；为 allowed 时也不得写出具体目录模型名。
-13. 问题需要包含 required_output.required_decision_count 指定数量的相互关联决策点，并实际使用一个给定的业务约束。
-14. 问题应自然紧凑，user_request 控制在 60 到 360 个中文字符之间。
+13. 问题需要包含 required_output.required_decision_count 指定数量的相互关联决策点，并实际使用一个给定的业务约束；这些决策要自然融入请求，不要写“请给出两个决策”“一是、二是”或机械编号。
+14. expression_profile 只规定表达方式，不是业务事实。严格按其中的 opening_mode、request_tone 和 information_order 组织问题：
+   - goal_first：从即将做出的下一步决定切入。
+   - constraint_first：从现实约束及其影响切入。
+   - uncertainty_first：从阻碍下一步的未知问题切入。
+   - material_first：从已有材料的通用角色切入，不声称材料中已经出现任何模式。
+   - tradeoff_first：从两个已提供约束之间的取舍切入。
+   - review_first：用领域中性的方案评审或分析复盘语境切入。
+   - handoff_first：用领域中性的分析交接语境切入，不虚构岗位或组织。
+   - conditional_first：用不同检查结果对应不同后续决策的条件关系切入。
+15. 避免以“我有一组时间序列”“我们有一份时间序列”“我们手上有”等占有式模板开场；不要为了变化而堆砌故事，真实感来自决策时点、未知问题和现实约束。
+16. 不得加入 external_context 未提供的行数、序列数量、历史长度、采样频率、均值、方差、极值、缺失率或任何精确数字。不得把统计结果、数据画像或观察结论当作场景背景。
+17. 问题应自然紧凑，user_request 控制在 60 到 360 个中文字符之间，可使用一个紧凑段落或自然的上下文加请求结构。
 
 只输出一个合法 JSON 对象，不要输出 Markdown 代码块。字段必须为：
 - user_request: 自然的中文用户问题。

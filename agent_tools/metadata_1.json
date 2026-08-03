@@ -1,0 +1,51 @@
+{
+  "name": "Foundation Time-Series Models",
+  "category": "时序基础模型",
+  "description": "Local foundation time-series model packages. Each model directory contains its own metadata, local weights when available, and inference adapter script.",
+  "usage": "Use logical path library/shared/models/foundation-timeseries/<ModelName> for local foundation inference.",
+  "metadata": {
+    "schema_version": "model-package-v1",
+    "runtime_type": "foundation",
+    "shared_runtime": false
+  },
+  "tasks": ["foundation_inference", "forecast"],
+  "skills": ["ts-foundation-inference", "time-series-ensemble"],
+  "entries": [
+    {
+      "id": "Chronos",
+      "name": "Chronos",
+      "path": "Chronos",
+      "catalog_path": "Chronos/metadata.json"
+    },
+    {
+      "id": "Chronos2",
+      "name": "Chronos2",
+      "path": "Chronos2",
+      "catalog_path": "Chronos2/metadata.json"
+    },
+    {
+      "id": "Moirai",
+      "name": "Moirai",
+      "path": "Moirai",
+      "catalog_path": "Moirai/metadata.json"
+    },
+    {
+      "id": "Sundial",
+      "name": "Sundial",
+      "path": "Sundial",
+      "catalog_path": "Sundial/metadata.json"
+    },
+    {
+      "id": "TimeMoE",
+      "name": "TimeMoE",
+      "path": "TimeMoE",
+      "catalog_path": "TimeMoE/metadata.json"
+    },
+    {
+      "id": "TimesFM",
+      "name": "TimesFM",
+      "path": "TimesFM",
+      "catalog_path": "TimesFM/metadata.json"
+    }
+  ]
+}

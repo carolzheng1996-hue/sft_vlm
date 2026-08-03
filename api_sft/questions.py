@@ -14,15 +14,50 @@ from .signal_generator import GENERATOR_VERSION
 
 
 QUESTION_SPEC_VERSION = "4.0"
-QUESTION_WRITER_PROMPT_ID = "question_writer_v3"
+QUESTION_WRITER_PROMPT_ID = "question_writer_v4"
 QUESTION_CONTRACT_VERSION = "3"
 QUESTION_RUNTIME_FORMAT_VERSION = "question_runtime_v2"
-QUESTION_AUDIT_FORMAT_VERSION = "question_generation_audit_v1"
+QUESTION_AUDIT_FORMAT_VERSION = "question_generation_audit_v2"
 QUESTION_MESSAGE_FORMAT = "neutral_local_images_v1"
 COVERAGE_REPORT_NAME = "coverage_report.json"
 TOOL_EXECUTION_SYSTEM_PROMPT_PATH = Path(__file__).with_name("prompts") / "tool_execution_system.txt"
 TOOL_EXECUTION_SYSTEM_PROMPT = TOOL_EXECUTION_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
 QUESTION_RUNTIME_KEYS = {"id", "format_version", "spec_ref", "task", "prompt", "resources", "allowed_tools"}
+
+EXPRESSION_PROFILE_VERSION = "expression_profile_v1"
+EXPRESSION_PROFILES = (
+    {"profile_id": "goal_first", "opening_mode": "goal_first", "request_tone": "collaborative", "information_order": "goal_unknown_constraint_decision"},
+    {"profile_id": "constraint_first", "opening_mode": "constraint_first", "request_tone": "direct", "information_order": "constraint_goal_unknown_decision"},
+    {"profile_id": "uncertainty_first", "opening_mode": "uncertainty_first", "request_tone": "consultative", "information_order": "unknown_impact_constraint_decision"},
+    {"profile_id": "material_first", "opening_mode": "material_first", "request_tone": "neutral", "information_order": "materials_goal_constraint_decision"},
+    {"profile_id": "tradeoff_first", "opening_mode": "tradeoff_first", "request_tone": "collaborative", "information_order": "tradeoff_goal_evidence_decision"},
+    {"profile_id": "review_first", "opening_mode": "review_first", "request_tone": "review", "information_order": "review_gap_constraint_decision"},
+    {"profile_id": "handoff_first", "opening_mode": "handoff_first", "request_tone": "conversational", "information_order": "handoff_goal_unknown_decision"},
+    {"profile_id": "conditional_first", "opening_mode": "conditional_first", "request_tone": "consultative", "information_order": "condition_branches_constraint_decision"},
+)
+QUESTION_NEAR_DUPLICATE_THRESHOLD = 0.93
+QUESTION_OPENING_PREFIX_CHARS = 12
+QUESTION_MAX_OPENING_PREFIX_USES = 2
+FORBIDDEN_WRITER_PAYLOAD_FIELDS = {
+    "visible_context",
+    "evidence_packet",
+    "statistics",
+    "data_scale",
+    "row_count",
+    "series_count",
+    "history_length",
+    "history_length_per_series",
+    "summary",
+    "mean",
+    "std",
+    "min",
+    "max",
+    "missing_ratio",
+    "observed_range",
+    "ground_truth",
+    "anomaly_indices",
+    "hidden_truth_for_verification_only",
+}
 
 TOOL_FOCUS = {
     "data_profile": ["data_profile", "data_quality_check", "series_overview", "summary_stats", "shape_distri", "Trend_linear", "adf_test", "seasonality_detector", "FFT", "STL", "cpt_detector", "plot"],
@@ -86,9 +121,17 @@ ANSWER_BLUEPRINT_PATTERNS = [
 IMAGE_CLAIM_PATTERNS = [r"图中(?:显示|可见)", r"图片中(?:显示|可见)", r"附图(?:显示|表明)", r"请看图", r"结合所给图像"]
 
 DATA_ENTITY_PATTERN = re.compile(r"数据|序列|指标|残差|模型|训练|验证|预测|预测区间|时间戳|时间索引|历史数据|历史观测|样本", re.I)
-DATA_FINDING_PATTERN = re.compile(r"缺失|异常|趋势|周期|季节|漂移|变点|相关|自相关|异方差|非平稳|长尾|零膨胀|偏差|偏离|遗漏|过拟合|欠拟合|震荡|白噪声|覆盖|退化|相似|差异|不同|不规则", re.I)
+DATA_FINDING_PATTERN = re.compile(r"缺失|异常|趋势|周期|季节|漂移|变点|相关|自相关|异方差|非平稳|长尾|零膨胀|偏差|偏离|遗漏|过拟合|欠拟合|震荡|白噪声|覆盖|退化|相似|差异|不同|不规则|历史(?:较短|较长|有限|不足)", re.I)
 DATA_ASSERTION_PATTERN = re.compile(r"存在|出现|呈现|表现|包含|显示|发现|具有|都有|均有|明显|显著|有限|不足|较短|较长|严重|偏离|遗漏|过拟合|欠拟合|震荡|退化|相似|不同", re.I)
 UNCERTAINTY_PATTERN = re.compile(r"是否|有无|能否|判断|检查|识别|评估|确认|核验|验证|分析|不确定|如果|若", re.I)
+DATA_COUNT_ASSERTION_PATTERN = re.compile(
+    r"(?:一共有|共有|共计|共|包含|有)\s*(?:[一二三四五六七八九十百千两\d]+|单个|多个|若干|多)\s*(?:组|条|个|段|份)?(?:时间序列|序列|观测|样本|数据点|行)",
+    re.I,
+)
+DATA_FREQUENCY_ASSERTION_PATTERN = re.compile(
+    r"(?:秒级|分钟级|小时级|日度|周度|月度|季度|年度|每秒|每分钟|每小时|每日|每周|每月|日频|周频|月频|按日|按周|按月)(?:采样|记录|数据|序列|指标|频率)?",
+    re.I,
+)
 
 
 def _choose_images(scenario: dict[str, Any], limit: int = 3) -> list[str]:
@@ -560,17 +603,56 @@ def safe_external_context(spec: dict[str, Any]) -> dict[str, Any]:
     return context
 
 
-def question_writer_payload(specs: list[dict[str, Any]], feedback: list[str] | None = None) -> dict[str, Any]:
+def _expression_profile(specs: list[dict[str, Any]]) -> dict[str, str]:
+    """Assign one reproducible, fact-free writing style to a question group."""
+
+    first = specs[0]
+    group_id = str(first.get("question_group_id") or first["id"])
+    digest = stable_hash({"version": EXPRESSION_PROFILE_VERSION, "group_id": group_id})
+    profile = EXPRESSION_PROFILES[int(digest[:8], 16) % len(EXPRESSION_PROFILES)]
+    return {"version": EXPRESSION_PROFILE_VERSION, **profile}
+
+
+def _safe_investigation_topic(spec: dict[str, Any]) -> str:
+    title = str(spec.get("subtask_title") or "").strip()
+    lowered = title.casefold()
+    unsafe = not title or bool(re.fullmatch(r"[a-z0-9_\-]+", lowered))
+    unsafe = unsafe or any(field.casefold() in lowered for field in FORBIDDEN_WRITER_PAYLOAD_FIELDS)
+    if unsafe:
+        title = f"{spec.get('task_label') or spec.get('task') or '当前任务'}中的待验证分析决策"
+    return f"待判断：{title}；结果未知"
+
+
+def _writer_payload_forbidden_paths(value: Any, prefix: str = "") -> list[str]:
+    violations: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if str(key).casefold() in FORBIDDEN_WRITER_PAYLOAD_FIELDS:
+                violations.append(path)
+            violations.extend(_writer_payload_forbidden_paths(child, path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            violations.extend(_writer_payload_forbidden_paths(child, f"{prefix}.{index}"))
+    return violations
+
+
+def question_writer_payload(
+    specs: list[dict[str, Any]],
+    feedback: list[str] | None = None,
+    expression_profile: dict[str, str] | None = None,
+) -> dict[str, Any]:
     first = specs[0]
     model_scope = str(first.get("model_catalog_scope", "none"))
     existing_result_comparison = model_scope == "none" and first.get("task") == "model_result_analysis"
     payload: dict[str, Any] = {
         "task": {
             "category": first["task_label"],
-            "investigation_topic": f"待判断：{first['subtask_title']}；结果未知",
+            "investigation_topic": _safe_investigation_topic(first),
             "business_goal": first["task_goal"],
         },
         "external_context": safe_external_context(first),
+        "expression_profile": expression_profile or _expression_profile(specs),
         "decision_boundaries": {
             "model_selection": (
                 "existing labeled model/result comparison is allowed, but proposing or naming new model families is forbidden"
@@ -590,6 +672,9 @@ def question_writer_payload(specs: list[dict[str, Any]], feedback: list[str] | N
     }
     if feedback:
         payload["validation_feedback"] = feedback
+    violations = _writer_payload_forbidden_paths(payload)
+    if violations:
+        raise ValueError("Unsafe question-writer payload fields: " + ", ".join(violations))
     return payload
 
 
@@ -653,6 +738,9 @@ def materialize_question_audit(
             "model": generation.get("model"),
             "attempts": attempts or [],
             "shared_generation_with": shared_generation_with,
+            "expression_profile_id": generation.get("expression_profile_id", ""),
+            "expression_profile_version": generation.get("expression_profile_version", EXPRESSION_PROFILE_VERSION),
+            "diversity": generation.get("diversity", {}),
             "decision_points": generation.get("decision_points", []),
             "constraint_key": generation.get("constraint_key", ""),
             "business_facts_used": generation.get("business_facts_used", []),
@@ -677,6 +765,22 @@ def _data_finding_assertions(text: str) -> list[str]:
             continue
         if DATA_ENTITY_PATTERN.search(compact) and DATA_FINDING_PATTERN.search(compact) and DATA_ASSERTION_PATTERN.search(compact):
             hits.append(compact)
+    return hits
+
+
+def _unsupported_data_assertions(text: str, pattern: re.Pattern[str]) -> list[str]:
+    """Find unsupported facts while allowing the same property as an open question."""
+
+    hits: list[str] = []
+    for clause in re.split(r"[，。；？！\n]", text):
+        compact = clause.strip()
+        if not compact:
+            continue
+        for match in pattern.finditer(compact):
+            if UNCERTAINTY_PATTERN.search(compact[: match.start()]):
+                continue
+            hits.append(compact)
+            break
     return hits
 
 
@@ -734,6 +838,8 @@ def validate_question(
     blueprint_hits = [pattern for pattern in ANSWER_BLUEPRINT_PATTERNS if re.search(pattern, text, flags=re.I | re.S)]
     image_claim_hits = [pattern for pattern in IMAGE_CLAIM_PATTERNS if re.search(pattern, text, flags=re.I)]
     finding_assertions = _data_finding_assertions(text)
+    data_count_assertions = _unsupported_data_assertions(text, DATA_COUNT_ASSERTION_PATTERN)
+    data_frequency_assertions = _unsupported_data_assertions(text, DATA_FREQUENCY_ASSERTION_PATTERN)
     allowed_tools = set(spec.get("internal_rubric", {}).get("allowed_user_tool_mentions", [])) if spec else set()
     named_tools: set[str] = set()
     if spec:
@@ -757,6 +863,8 @@ def validate_question(
         "grounded_numbers": not unexpected_numbers,
         "grounded_business_facts": bool(business_facts_used) and not unknown_fact_paths if spec else True,
         "no_derived_findings": not finding_assertions,
+        "no_ungrounded_data_counts": not data_count_assertions,
+        "no_ungrounded_frequency": not data_frequency_assertions,
         "modality_neutral": not image_claim_hits,
         "allowed_tool_mentions": not unexpected_tools,
         "no_model_name_leak": not named_models,
@@ -773,6 +881,8 @@ def validate_question(
             "unexpected_numbers": unexpected_numbers,
             "unknown_fact_paths": unknown_fact_paths,
             "derived_finding_assertions": finding_assertions,
+            "ungrounded_data_count_assertions": data_count_assertions,
+            "ungrounded_frequency_assertions": data_frequency_assertions,
             "image_claim_hits": image_claim_hits,
             "unexpected_tool_mentions": unexpected_tools,
             "model_name_leaks": sorted(set(named_models)),
@@ -793,11 +903,16 @@ def _validation_feedback(quality: dict[str, Any]) -> list[str]:
         "grounded_numbers": "删除外部业务条件中不存在的精确数字；不得引用数据统计值。",
         "grounded_business_facts": "business_facts_used 必须引用真实存在的 external_context 字段路径。",
         "no_derived_findings": "不要陈述缺失、趋势、周期、异常等数据结论；改成需要检查或判断的问题。",
+        "no_ungrounded_data_counts": "不要陈述未提供的序列数、行数、样本数或观测数；如确需了解，请写成待检查事项。",
+        "no_ungrounded_frequency": "不要陈述未提供的采样或记录频率；如确需了解，请写成待检查事项。",
         "modality_neutral": "不要声称图片显示了什么，也不要直接提示看图。",
         "allowed_tool_mentions": "除允许的工具边界题外，不要点名具体工具。",
         "no_model_name_leak": "不要提前给出任何具体模型名称。",
         "model_scope": "该子任务不允许模型选型；请改为数据检查、转换、诊断或证据补充决策。",
         "not_single_fact": "问题不能退化为单一事实判断。",
+        "cross_group_unique": "该问题与另一个问题组完全重复；请改变开场、信息顺序和请求方式。",
+        "cross_group_near_unique": "该问题与已有问题过于相似；请保留任务含义，但重组句式和现实决策语境。",
+        "opening_prefix_not_overused": "该开场在当前批次使用过多；请按 expression_profile 改用不同切入方式。",
     }
     return [messages[name] for name, passed in quality["checks"].items() if not passed]
 
@@ -809,6 +924,110 @@ def _groups(rows: Iterable[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return [grouped[key] for key in sorted(grouped)]
 
 
+def _normalized_question_text(text: str) -> str:
+    return re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "", text).casefold()
+
+
+def _opening_prefix(text: str) -> str:
+    return _normalized_question_text(text)[:QUESTION_OPENING_PREFIX_CHARS]
+
+
+def _opening_family(text: str) -> str:
+    compact = re.sub(r"\s+", "", text)
+    patterns = (
+        ("possession", r"^(?:我|我们)(?:手头|手上)?有"),
+        ("constraint_first", r"^(?:由于|受限于|考虑到|在.{0,12}(?:约束|要求)下)"),
+        ("conditional_first", r"^(?:如果|假如|若|一旦)"),
+        ("uncertainty_first", r"^(?:目前还不清楚|现在不确定|尚不确定|关键问题是)"),
+        ("handoff_first", r"^(?:刚接手|这项分析刚|这份分析刚|接下来由我)"),
+        ("review_first", r"^(?:复盘|评审|回看|当前方案|现阶段方案)"),
+        ("tradeoff_first", r"^(?:一方面|既要|业务上|当前需要兼顾)"),
+        ("goal_first", r"^(?:为了|在进入|下一步|当前需要|我们需要)"),
+        ("material_first", r"^(?:现有|目前已有|已有材料|这份材料|手头材料)"),
+    )
+    for family, pattern in patterns:
+        if re.search(pattern, compact):
+            return family
+    return "other"
+
+
+def validate_question_diversity(
+    text: str,
+    peer_questions: list[tuple[str, str, str]],
+) -> dict[str, Any]:
+    """Apply a light corpus-level gate across independent question groups."""
+
+    normalized = _normalized_question_text(text)
+    opening = _opening_prefix(text)
+    exact_matches: list[str] = []
+    opening_matches: list[str] = []
+    closest_id = ""
+    closest_group_id = ""
+    max_similarity = 0.0
+    for group_id, row_id, peer_text in peer_questions:
+        peer_normalized = _normalized_question_text(peer_text)
+        if normalized == peer_normalized:
+            exact_matches.append(row_id)
+        if opening and opening == _opening_prefix(peer_text):
+            opening_matches.append(row_id)
+        similarity = SequenceMatcher(None, normalized, peer_normalized).ratio()
+        if similarity > max_similarity:
+            max_similarity = similarity
+            closest_id = row_id
+            closest_group_id = group_id
+    checks = {
+        "cross_group_unique": not exact_matches,
+        "cross_group_near_unique": max_similarity <= QUESTION_NEAR_DUPLICATE_THRESHOLD,
+        "opening_prefix_not_overused": len(opening_matches) < QUESTION_MAX_OPENING_PREFIX_USES,
+    }
+    return {
+        "passed": all(checks.values()),
+        "checks": checks,
+        "opening_prefix": opening,
+        "opening_prefix_prior_uses": len(opening_matches),
+        "opening_match_ids": opening_matches,
+        "exact_match_ids": exact_matches,
+        "closest_question_id": closest_id,
+        "closest_group_id": closest_group_id,
+        "max_similarity": round(max_similarity, 4),
+        "near_duplicate_threshold": QUESTION_NEAR_DUPLICATE_THRESHOLD,
+    }
+
+
+def _with_diversity_quality(
+    quality: dict[str, Any],
+    diversity: dict[str, Any],
+) -> dict[str, Any]:
+    result = dict(quality)
+    result["checks"] = {**quality.get("checks", {}), **diversity.get("checks", {})}
+    result["details"] = {**quality.get("details", {}), "diversity": diversity}
+    result["passed"] = all(result["checks"].values())
+    result["complexity_score"] = round(
+        sum(result["checks"].values()) / max(1, len(result["checks"])),
+        4,
+    )
+    return result
+
+
+def _peer_questions(
+    existing: dict[str, dict[str, Any]],
+    spec_by_id: dict[str, dict[str, Any]],
+    exclude_group_id: str,
+) -> list[tuple[str, str, str]]:
+    representatives: dict[str, tuple[str, str, str]] = {}
+    for row_id in sorted(existing):
+        spec = spec_by_id.get(row_id)
+        if not spec:
+            continue
+        group_id = str(spec.get("question_group_id") or row_id)
+        if group_id == exclude_group_id or group_id in representatives:
+            continue
+        text = str((existing[row_id].get("prompt") or {}).get("user_request") or "")
+        if text:
+            representatives[group_id] = (group_id, row_id, text)
+    return list(representatives.values())
+
+
 def generate_questions(
     specs_path: Path,
     output_path: Path,
@@ -817,7 +1036,7 @@ def generate_questions(
     writer_prompt_path: Path,
     resume: bool = False,
     limit: int | None = None,
-    max_attempts: int = 2,
+    max_attempts: int = 3,
     audit_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     audit_path = audit_path or output_path.with_name("questions.audit.jsonl")
@@ -838,6 +1057,13 @@ def generate_questions(
         metadata = audit.get("question_generation", {})
         user_request = str(row.get("prompt", {}).get("user_request", ""))
         quality = validate_question(user_request, spec, metadata) if spec else {"passed": False}
+        if spec:
+            group_id = str(spec.get("question_group_id") or row_id)
+            diversity = validate_question_diversity(
+                user_request,
+                _peer_questions(existing, spec_by_id, group_id),
+            )
+            quality = _with_diversity_quality(quality, diversity)
         reusable = bool(
             spec
             and set(row) == QUESTION_RUNTIME_KEYS
@@ -879,6 +1105,9 @@ def generate_questions(
         generation: dict[str, Any] | None = None
         quality: dict[str, Any] | None = None
         attempts: list[dict[str, Any]] = []
+        group_id = str(group[0].get("question_group_id") or group[0]["id"])
+        expression_profile = _expression_profile(group)
+        peer_questions = _peer_questions(existing, spec_by_id, group_id)
         if reusable:
             reusable_audit = accepted_audits[reusable["id"]]
             reusable_metadata = reusable_audit.get("question_generation", {})
@@ -888,12 +1117,17 @@ def generate_questions(
                 "constraint_key": reusable_metadata.get("constraint_key", ""),
                 "business_facts_used": reusable_metadata.get("business_facts_used", []),
                 "model": reusable_metadata.get("model"),
+                "expression_profile_id": expression_profile["profile_id"],
+                "expression_profile_version": expression_profile["version"],
             }
             quality = validate_question(generation["user_request"], group[0], generation)
+            diversity = validate_question_diversity(generation["user_request"], peer_questions)
+            generation["diversity"] = diversity
+            quality = _with_diversity_quality(quality, diversity)
         else:
             feedback: list[str] = []
             for attempt in range(1, max_attempts + 1):
-                payload = question_writer_payload(group, feedback)
+                payload = question_writer_payload(group, feedback, expression_profile)
                 try:
                     raw, usage, latency = client.complete([
                         {"role": "system", "content": writer_system},
@@ -906,8 +1140,13 @@ def generate_questions(
                         "constraint_key": str(obj.get("constraint_key", "")).strip(),
                         "business_facts_used": obj.get("business_facts_used", []),
                         "model": model_config.get("model"),
+                        "expression_profile_id": expression_profile["profile_id"],
+                        "expression_profile_version": expression_profile["version"],
                     }
                     quality = validate_question(candidate["user_request"], group[0], candidate)
+                    diversity = validate_question_diversity(candidate["user_request"], peer_questions)
+                    candidate["diversity"] = diversity
+                    quality = _with_diversity_quality(quality, diversity)
                     attempts.append({"attempt": attempt, "status": "accepted" if quality["passed"] else "validation_failed", "usage": usage, "latency_seconds": round(latency, 3), "quality": quality})
                     if quality["passed"]:
                         generation = candidate
@@ -956,7 +1195,7 @@ def rewrite_questions(
     writer_prompt_path: Path,
     resume: bool = False,
     limit: int | None = None,
-    max_attempts: int = 2,
+    max_attempts: int = 3,
     audit_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Deprecated compatibility alias for the direct question writer."""
@@ -987,7 +1226,19 @@ def refresh_question_records(specs_path: Path, output_path: Path, audit_path: Pa
         }
         if not generation["user_request"]:
             continue
+        group_id = str(spec.get("question_group_id") or spec["id"])
+        profile = _expression_profile([spec])
+        generation["expression_profile_id"] = profile["profile_id"]
+        generation["expression_profile_version"] = profile["version"]
         quality = validate_question(generation["user_request"], spec, generation)
+        peers = _peer_questions(
+            {row["id"]: row for row in refreshed},
+            specs,
+            group_id,
+        )
+        diversity = validate_question_diversity(generation["user_request"], peers)
+        generation["diversity"] = diversity
+        quality = _with_diversity_quality(quality, diversity)
         if not quality["passed"]:
             continue
         refreshed.append(materialize_question_record(spec, generation))
@@ -1022,6 +1273,7 @@ def _coverage_rows(
             **spec,
             "user_request": runtime.get("prompt", {}).get("user_request", ""),
             "question_quality": audit.get("question_quality", {}),
+            "expression_profile_id": (audit.get("question_generation") or {}).get("expression_profile_id", "missing"),
         })
     return rows
 
@@ -1049,19 +1301,34 @@ def write_coverage_report(
     representatives: dict[str, dict[str, Any]] = {}
     for index, row in enumerate(rows):
         representatives.setdefault(str(row.get("question_group_id") or row.get("pair_id") or row.get("id") or f"row_{index}"), row)
-    normalized = [(group, re.sub(r"\s+", "", row.get("user_request", row.get("question", "")))) for group, row in representatives.items()]
+    normalized = [
+        (group, _normalized_question_text(str(row.get("user_request", row.get("question", "")))))
+        for group, row in representatives.items()
+    ]
     exact_duplicates = len(normalized) - len({text for _, text in normalized})
     near = 0
-    grouped_texts: dict[tuple[str, str], list[str]] = defaultdict(list)
-    for _, row in representatives.items():
-        grouped_texts[(row["subtask_id"], row["input_mode"])].append(re.sub(r"\s+", "", row.get("user_request", row.get("question", ""))))
-    for texts in grouped_texts.values():
-        for i in range(len(texts)):
-            if any(SequenceMatcher(None, texts[i], texts[j]).ratio() > 0.96 for j in range(i)):
-                near += 1
+    texts = [text for _, text in normalized]
+    for i in range(len(texts)):
+        if any(SequenceMatcher(None, texts[i], texts[j]).ratio() > QUESTION_NEAR_DUPLICATE_THRESHOLD for j in range(i)):
+            near += 1
     average_chars = round(sum(len(row.get("user_request", row.get("question", ""))) for row in rows) / max(1, len(rows)), 2)
     average_complexity = round(sum(row.get("question_quality", {}).get("complexity_score", 0) for row in rows) / max(1, len(rows)), 4)
-    report["quality"] = {"exact_duplicate_count": exact_duplicates, "near_duplicate_count": near, "average_user_request_characters": average_chars, "average_complexity_score": average_complexity}
+    representative_rows = list(representatives.values())
+    opening_families = Counter(_opening_family(str(row.get("user_request", row.get("question", "")))) for row in representative_rows)
+    style_profiles = Counter(str(row.get("expression_profile_id") or "missing") for row in representative_rows)
+    report["quality"] = {
+        "exact_duplicate_count": exact_duplicates,
+        "near_duplicate_count": near,
+        "near_duplicate_threshold": QUESTION_NEAR_DUPLICATE_THRESHOLD,
+        "average_user_request_characters": average_chars,
+        "average_complexity_score": average_complexity,
+        "expression_profile_counts": dict(style_profiles),
+        "opening_family_counts": dict(opening_families),
+        "generic_possession_opening_ratio": round(
+            opening_families.get("possession", 0) / max(1, len(representative_rows)),
+            4,
+        ),
+    }
     scenario_modes: dict[str, set[str]] = defaultdict(set)
     scenario_values: dict[str, str] = {}
     for row in rows:

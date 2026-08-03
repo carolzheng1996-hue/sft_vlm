@@ -1,0 +1,59 @@
+{
+  "name": "TSA Shared Model Library",
+  "version": "1.0.0",
+  "description": "Unified shared model library for forecasting, anomaly detection, regression, classification, foundation inference, third-party open-source models, and internal custom models.",
+  "metadata": {
+    "schema_version": "model-library-v1",
+    "logical_root": "library/shared/models",
+    "catalog_type": "root"
+  },
+  "model_packages": [
+    {
+      "id": "time-series-library",
+      "name": "Time-Series-Library",
+      "path": "time-series-library",
+      "runtime_type": "tslib",
+      "tasks": ["forecast", "anomaly_detection", "classification"],
+      "skills": ["ts-model-selection", "ts-ad-model-selection", "ts-classification-experiment-setup"],
+      "catalog_path": "time-series-library/metadata.json",
+      "code_path": "time-series-library/code"
+    },
+    {
+      "id": "time-series-library-regression",
+      "name": "Time-Series-Library Regression",
+      "path": "time-series-library-regression",
+      "runtime_type": "tslib_regression",
+      "tasks": ["regression"],
+      "skills": ["time-series-regression-agent"],
+      "catalog_path": "time-series-library-regression/metadata.json",
+      "code_path": "time-series-library-regression/code"
+    },
+    {
+      "id": "foundation-timeseries",
+      "name": "Foundation Time-Series Models",
+      "path": "foundation-timeseries",
+      "runtime_type": "foundation",
+      "tasks": ["foundation_inference", "forecast"],
+      "skills": ["ts-foundation-inference", "time-series-ensemble"],
+      "catalog_path": "foundation-timeseries/metadata.json"
+    },
+    {
+      "id": "open-source",
+      "name": "Open Source Time-Series Models",
+      "path": "open-source",
+      "runtime_type": "open_source",
+      "tasks": ["forecast", "anomaly_detection", "regression", "classification"],
+      "skills": ["ts-model-selection"],
+      "catalog_path": "open-source/metadata.json"
+    },
+    {
+      "id": "custom",
+      "name": "Custom Time-Series Models",
+      "path": "custom",
+      "runtime_type": "custom",
+      "tasks": ["forecast", "anomaly_detection", "regression", "classification"],
+      "skills": [],
+      "catalog_path": "custom/metadata.json"
+    }
+  ]
+}

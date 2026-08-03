@@ -92,6 +92,32 @@ python -m api_sft --config api_sft/config.yaml generate-questions --fresh
 
 `generate-question-specs` 不调用 API；`generate-questions` 使用 `models.question`。首次生成或协议升级使用 `--fresh`，已有 final、audit、rejected 和 coverage 会被移动到 `question_run_archives/<timestamp>/`；只有同一 Final/Audit 协议的中断续跑才使用 `--resume`。快速小规模检查可以给两个命令加 `--limit`。`rewrite-questions` 暂时保留为 `generate-questions` 的弃用别名。
 
+Question Writer 会按问题组稳定分配目标、约束、不确定性、材料、权衡、复盘、交接或条件优先的表达风格；text/image 配对继续共享同一问题。Writer 只接收精简的外部业务上下文，不接收数据规模、统计摘要或观测结论。生成阶段会拒绝跨组重复、相似度高于 `0.93` 的近重复、高频相同开场，以及未经提供的数量、频率和数据结论；风格与去重信息记录在 `questions.audit.jsonl` 和 coverage 报告中。
+
+### 独立并发 Question 生成器
+
+如需加速 Question 生成，可使用独立的 `questions_concurrent` 模块。它保持与串行 `generate-questions` 相同的 QuestionSpec、提示词、质量校验、去重和输出协议；每个 `question_group` 单独占用一个并发槽，不会把多个不同问题合并到一次 LLM 请求中。paired group 仍只调用一次 LLM，并物化为共享相同问题文本的 `text-only` 和 `image-text` 两条记录。
+
+当前数据中的 `question_specs.jsonl` 包含 506 个 `question_group`、622 条 spec。生成全部 group（不要传 `--limit`）可执行：
+
+```bash
+python -m api_sft.questions_concurrent \
+  --config api_sft/config.yaml \
+  --max-concurrency 4 \
+  --fresh
+```
+
+并发结果写入独立目录 `output/concurrent_questions/`，不会覆盖串行生成器的 `questions.final.jsonl`、audit、rejected 或 coverage。`--fresh` 会先归档该并发子目录中的旧产物；如果任务中断，可用以下命令续跑：
+
+```bash
+python -m api_sft.questions_concurrent \
+  --config api_sft/config.yaml \
+  --max-concurrency 4 \
+  --resume
+```
+
+`--max-concurrency` 命令行参数优先于 `generation.max_concurrency`（当前默认值为 4）；`--limit N` 仅用于小规模试跑。以当前模型和历史请求延迟估算，506 个 group 在并发 4 下首次通过通常约需 55--65 分钟，考虑校验重试后建议预留 1--1.5 小时，遇到限流或大量重试时可能接近 2 小时。paired group 虽然最终产生两条记录，但只计一次 API 请求，因此最终记录数通常接近 622 条，实际数量以 rejected 和 coverage 报告为准。
+
 没有旧场景时可改用 `generate-scenarios` 直接生成当前场景。迁移命令默认读取 `output/legacy/scenarios_v3/scenarios.jsonl`；旧版 Question 不会跨协议复用，记录内部仍通过 `generator_version`、`question_spec_version` 和 `question_contract_version` 标识协议。
 
 完整执行：
